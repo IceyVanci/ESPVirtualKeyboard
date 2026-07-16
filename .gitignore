@@ -1,0 +1,25 @@
+# Arduino IDE
+*.pde.cpp
+*.hex
+*.elf
+*.bin
+build/
+.preferred_cli_options
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+*.iml
+.cproject
+.project
+.settings/
+
+# Local credentials
+.env.local
