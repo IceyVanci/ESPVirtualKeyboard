@@ -352,8 +352,10 @@ String WebController::generateHTML() {
     <span id="autoSt" class="tag tag-off">AUTO: OFF</span>
     <span id="upSt" class="tag">00:00:00</span>
     <span id="clockSt" class="tag">--:--:--</span>
-    <button class="top-btn top-btn-warn" onclick="bleReboot()" title="断开并重新配对">🔄</button>
-    <button class="theme-btn" onclick="toggleTheme()" id="themeBtn" title="切换明暗主题">🌙</button>
+    <button class="top-btn top-btn-warn" onclick="bleReboot()" id="btnPair">配对</button>
+    <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">明暗</button>
+    <button class="top-btn" onclick="toggleLang()" id="btnLang">En</button>
+    <button class="top-btn" onclick="showAbout()" id="btnAbout">关于</button>
   </div>
 </div>
 
@@ -361,43 +363,43 @@ String WebController::generateHTML() {
   <!-- 控制面板 -->
   <div class="ctrl-grid">
     <div class="ctrl-card">
-      <div class="ctrl-title" onclick="togglePanel('autoPanel')">⚙️ 自动模式 <span class="arrow">▾</span></div>
+      <div class="ctrl-title" onclick="togglePanel('autoPanel')"><span id="lblAutoMode">⚙️ 自动模式</span> <span class="arrow">▾</span></div>
       <div id="autoPanel" class="ctrl-body">
         <button id="autoBtn" class="btn btn-green" onclick="toggleAuto()">▶ 开启</button>
         <div class="sld-group">
-          <div class="sld-label">间隔 <span id="ivD">800-4000</span>ms</div>
+          <div class="sld-label"><span id="lblInterval">间隔</span> <span id="ivD">800-4000</span>ms</div>
           <div class="sld-row"><input type="range" id="iv1" min="200" max="10000" value="800" oninput="updSld()"><input type="range" id="iv2" min="200" max="10000" value="4000" oninput="updSld()"></div>
         </div>
         <div class="sld-group">
-          <div class="sld-label">持续 <span id="hdD">80-600</span>ms</div>
+          <div class="sld-label"><span id="lblHold">持续</span> <span id="hdD">80-600</span>ms</div>
           <div class="sld-row"><input type="range" id="hd1" min="20" max="3000" value="80" oninput="updSld()"><input type="range" id="hd2" min="20" max="3000" value="600" oninput="updSld()"></div>
         </div>
         <div class="wt-grid">
-          <div class="wt-item"><span>W 前进</span><input type="range" id="wW" min="0" max="100" value="30" oninput="updWt()"><span class="wt-v" id="wWv">0.30</span></div>
-          <div class="wt-item"><span>S 后退</span><input type="range" id="wS" min="0" max="100" value="8" oninput="updWt()"><span class="wt-v" id="wSv">0.08</span></div>
-          <div class="wt-item"><span>A 左移</span><input type="range" id="wA" min="0" max="100" value="12" oninput="updWt()"><span class="wt-v" id="wAv">0.12</span></div>
-          <div class="wt-item"><span>D 右移</span><input type="range" id="wD" min="0" max="100" value="12" oninput="updWt()"><span class="wt-v" id="wDv">0.12</span></div>
-          <div class="wt-item"><span>← 左转</span><input type="range" id="wTL" min="0" max="100" value="10" oninput="updWt()"><span class="wt-v" id="wTLv">0.10</span></div>
-          <div class="wt-item"><span>→ 右转</span><input type="range" id="wTR" min="0" max="100" value="10" oninput="updWt()"><span class="wt-v" id="wTRv">0.10</span></div>
-          <div class="wt-item"><span>Space 跳</span><input type="range" id="wSP" min="0" max="100" value="8" oninput="updWt()"><span class="wt-v" id="wSPv">0.08</span></div>
-          <div class="wt-item"><span>C 蹲下</span><input type="range" id="wC" min="0" max="100" value="5" oninput="updWt()"><span class="wt-v" id="wCv">0.05</span></div>
-          <div class="wt-item"><span>Z 趴下</span><input type="range" id="wZ" min="0" max="100" value="5" oninput="updWt()"><span class="wt-v" id="wZv">0.05</span></div>
-          <div class="wt-item"><span>Idle 空闲</span><input type="range" id="wId" min="0" max="100" value="8" oninput="updWt()"><span class="wt-v" id="wIdv">0.08</span></div>
+          <div class="wt-item"><span id="lblWF">W 前进</span><input type="range" id="wW" min="0" max="100" value="30" oninput="updWt()"><span class="wt-v" id="wWv">0.30</span></div>
+          <div class="wt-item"><span id="lblWS">S 后退</span><input type="range" id="wS" min="0" max="100" value="8" oninput="updWt()"><span class="wt-v" id="wSv">0.08</span></div>
+          <div class="wt-item"><span id="lblWA">A 左移</span><input type="range" id="wA" min="0" max="100" value="12" oninput="updWt()"><span class="wt-v" id="wAv">0.12</span></div>
+          <div class="wt-item"><span id="lblWD">D 右移</span><input type="range" id="wD" min="0" max="100" value="12" oninput="updWt()"><span class="wt-v" id="wDv">0.12</span></div>
+          <div class="wt-item"><span id="lblWTL">← 左转</span><input type="range" id="wTL" min="0" max="100" value="10" oninput="updWt()"><span class="wt-v" id="wTLv">0.10</span></div>
+          <div class="wt-item"><span id="lblWTR">→ 右转</span><input type="range" id="wTR" min="0" max="100" value="10" oninput="updWt()"><span class="wt-v" id="wTRv">0.10</span></div>
+          <div class="wt-item"><span id="lblWSP">Space 跳</span><input type="range" id="wSP" min="0" max="100" value="8" oninput="updWt()"><span class="wt-v" id="wSPv">0.08</span></div>
+          <div class="wt-item"><span id="lblWC">C 蹲下</span><input type="range" id="wC" min="0" max="100" value="5" oninput="updWt()"><span class="wt-v" id="wCv">0.05</span></div>
+          <div class="wt-item"><span id="lblWZ">Z 趴下</span><input type="range" id="wZ" min="0" max="100" value="5" oninput="updWt()"><span class="wt-v" id="wZv">0.05</span></div>
+          <div class="wt-item"><span id="lblWId">Idle 空闲</span><input type="range" id="wId" min="0" max="100" value="8" oninput="updWt()"><span class="wt-v" id="wIdv">0.08</span></div>
         </div>
-        <div class="wt-total">总计: <span id="wtSum">0.88</span></div>
+        <div class="wt-total"><span id="lblTotal">总计</span>: <span id="wtSum">0.88</span></div>
         <div class="btn-row">
-          <button class="btn btn-blue btn-half" onclick="applyCfg()">✅ 应用</button>
-          <button class="btn btn-green btn-half" onclick="saveToSlot()">💾 保存到配置</button>
+          <button class="btn btn-blue btn-half" onclick="applyCfg()" id="btnApply">✅ 应用</button>
+          <button class="btn btn-green btn-half" onclick="saveToSlot()" id="btnSaveTo">💾 保存到配置</button>
         </div>
       </div>
     </div>
 
     <!-- 配置管理 -->
     <div class="ctrl-card slot-card" id="slotCard">
-    <div class="slot-title">💾 配置管理
+    <div class="slot-title"><span id="lblConfigMgr">💾 配置管理</span>
       <div class="slot-actions">
-        <button class="btn btn-blue btn-sm" onclick="exportCurrent()">📤 导出当前</button>
-        <label class="btn btn-green btn-sm import-label">📥 导入当前<input type="file" accept=".json" onchange="importCurrent(this)" style="display:none"></label>
+        <button class="btn btn-blue btn-sm" onclick="exportCurrent()" id="btnExportCurr">📤 导出当前</button>
+        <label class="btn btn-green btn-sm import-label" id="lblImportCurr"><span id="lblImportCurrText">📥 导入当前</span><input type="file" accept=".json" onchange="importCurrent(this)" style="display:none"></label>
       </div>
     </div>
       <div id="slotList" class="slot-list">
@@ -504,6 +506,7 @@ String WebController::generateHTML() {
         <div class="k w1-25">☰</div>
         <div class="k w1-25" data-k="rctrl">Ctrl</div>
       </div>
+    </div>
 
       <!-- 编辑键区和方向键 (右侧分离区域) -->
       <div class="kb-right">
@@ -566,33 +569,48 @@ String WebController::generateHTML() {
           <div class="k-gap-fill"></div>
         </div>
       </div>
-    </div>
   </div>
 
   <!-- 按键日志 & 统计 -->
   <div class="log-stats-grid">
   <div class="log-card">
-    <div class="log-title">📋 按键日志 <span id="logRunTime" style="font-size:0.8em;color:var(--dim);margin-left:auto;margin-right:8px">00:00:00</span> <button class="log-clear-btn" onclick="clearLog()">清空</button></div>
-    <div id="logBox" class="log-box"><div class="log-empty">等待自动模式按键...</div></div>
+    <div class="log-title"><span id="lblKeyLog">📋 按键日志</span> <span id="logRunTime" style="font-size:0.8em;color:var(--dim);margin-left:auto;margin-right:8px">00:00:00</span> <button class="log-clear-btn" onclick="clearLog()" id="btnClearLog">清空</button></div>
+    <div id="logBox" class="log-box"><div class="log-empty" id="lblWaitLog">等待自动模式按键...</div></div>
   </div>
 
   <!-- 按键统计 -->
   <div class="stats-card">
-    <div class="stats-title">📊 按键统计 <button class="log-clear-btn" onclick="clearStats()">重置</button></div>
+    <div class="stats-title"><span id="lblKeyStats">📊 按键统计</span> <button class="log-clear-btn" onclick="clearStats()" id="btnResetStats">重置</button></div>
     <div id="statsBox" class="stats-body">
-      <div class="stats-row stats-hdr"><span class="sk">按键</span><span class="sc">次数</span><span class="sp">比例</span></div>
+      <div class="stats-row stats-hdr"><span class="sk" id="lblKeyCol">按键</span><span class="sc" id="lblCountCol">次数</span><span class="sp" id="lblPctCol">比例</span></div>
       <div id="statsRows"></div>
-      <div class="stats-row stats-total"><span class="sk">总计</span><span class="sc" id="statsTotal">0</span><span class="sp"></span></div>
+      <div class="stats-row stats-total"><span class="sk" id="lblTotalRow">总计</span><span class="sc" id="statsTotal">0</span><span class="sp"></span></div>
     </div>
   </div>
   </div>
 <!-- 配置槽位选择弹窗 -->
 <div id="slotModal" class="modal-overlay" style="display:none">
   <div class="modal-card">
-    <div class="modal-title">💾 保存到配置</div>
-    <div class="modal-subtitle">选择目标槽位：</div>
+    <div class="modal-title" id="slotModalTitle">💾 保存到配置</div>
+    <div class="modal-subtitle" id="slotModalSub">选择目标槽位：</div>
     <div id="modalSlots" class="modal-slots"></div>
-    <button class="btn btn-red modal-cancel" onclick="closeSlotModal()">取消</button>
+    <button class="btn btn-red modal-cancel" onclick="closeSlotModal()" id="btnSlotCancel">取消</button>
+  </div>
+</div>
+
+<!-- 关于弹窗 -->
+<div id="aboutModal" class="modal-overlay" style="display:none">
+  <div class="modal-card">
+    <div class="modal-title" id="aboutTitle">关于</div>
+    <div class="about-content">
+      <div class="about-name">ESP Virtual Keyboard</div>
+      <div class="about-ver">v1.0</div>
+      <div class="about-row"><span class="about-label" id="aboutAuthor">作者</span><span>IceyVanci</span></div>
+      <div class="about-row"><span class="about-label" id="aboutLicense">许可证</span><span>MIT License</span></div>
+      <div class="about-row"><span class="about-label" id="aboutDev">开发</span><span id="aboutDevText">在 MimoV2.5Pro 协助下开发</span></div>
+      <div class="about-row"><span class="about-label">GitHub</span><a href="https://github.com/IceyVanci/ESPVirtualKeyboard" target="_blank" style="color:var(--accent);word-break:break-all">IceyVanci/ESPVirtualKeyboard</a></div>
+    </div>
+    <button class="btn btn-blue" onclick="closeAbout()" id="aboutClose">关闭</button>
   </div>
 </div>
 
@@ -646,10 +664,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .wt-total{margin-top:6px;padding:4px 0;font-size:0.82em;text-align:right;color:var(--dim)}
 .wt-total .ok{color:var(--green);font-weight:600}
 .wt-total .over{color:var(--red);font-weight:600}
-.kb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;justify-content:center;overflow-x:auto}
+.kb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;justify-content:center;align-items:flex-start;gap:14px;overflow-x:auto}
 .kb{display:inline-flex;flex-direction:column;gap:4px}
 .kb-row{display:flex;gap:3px}
-.kb-right{display:flex;flex-direction:column;gap:3px;margin-left:14px}
+.kb-right{display:flex;flex-direction:column;gap:3px}
 .k{background:var(--key-bg);border:1px solid var(--key-border);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:0.72em;cursor:pointer;user-select:none;transition:all .08s;min-height:34px;padding:2px 4px;text-align:center;line-height:1.2;box-shadow:0 1px 2px rgba(0,0,0,0.1)}
 .k:hover{background:var(--key-h);border-color:var(--dim);transform:translateY(-1px)}
 .k:active,.k.on{background:var(--key-active);color:#fff;border-color:var(--key-active);transform:translateY(1px);box-shadow:inset 0 1px 3px rgba(0,0,0,0.2)}
@@ -657,7 +675,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .k.sm{font-size:0.65em;min-height:30px}
 .k-gap{width:6px;flex-shrink:0}
 .k-gap-fill{width:42px;height:30px}
-.kb-numpad{display:flex;flex-direction:column;gap:3px;margin-left:14px;padding-left:14px;border-left:2px solid var(--border)}
+.kb-numpad{display:flex;flex-direction:column;gap:3px;padding-left:14px;border-left:2px solid var(--border)}
 .np-add{min-height:30px;height:auto}
 .np-enter{height:auto;position:relative}
 .np-zero{width:42px}
@@ -735,6 +753,11 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .modal-slot .slot-name{flex:1;font-size:0.9em}
 .modal-slot .slot-name.empty{color:var(--dim);font-style:italic}
 .modal-cancel{margin-top:0}
+.about-content{margin-bottom:12px}
+.about-name{font-size:1.2em;font-weight:700;color:var(--accent);margin-bottom:2px}
+.about-ver{font-size:0.85em;color:var(--dim);margin-bottom:12px}
+.about-row{display:flex;gap:10px;padding:4px 0;font-size:0.88em;border-bottom:1px solid rgba(48,54,61,0.3)}
+.about-label{color:var(--dim);min-width:48px;font-weight:600}
 @media(max-width:768px){
   .ctrl-grid,.log-stats-grid{grid-template-columns:1fr}
   .kb-wrap{padding:8px}
@@ -1093,6 +1116,109 @@ function importCurrent(input){
   input.value='';
 }
 
-loadCfg();updStatus();setInterval(updStatus,200);setInterval(pollEvents,500);updStats();setInterval(updStats,2000);loadSlots();
+// ---- 关于弹窗 ----
+function showAbout(){document.getElementById('aboutModal').style.display='flex';}
+function closeAbout(){document.getElementById('aboutModal').style.display='none';}
+
+// ---- 中英文切换 ----
+var lang='zh';
+var i18n={
+  zh:{pair:'配对',theme:'明暗',langBtn:'En',about:'关于',
+      autoMode:'⚙️ 自动模式',on:'▶ 开启',off:'⏹ 关闭',
+      interval:'间隔',hold:'持续',total:'总计',
+      wForward:'W 前进',wBack:'S 后退',wLeft:'A 左移',wRight:'D 右移',
+      tLeft:'← 左转',tRight:'→ 右转',jump:'Space 跳',crouch:'C 蹲下',prone:'Z 趴下',idle:'Idle 空闲',
+      apply:'✅ 应用',saveTo:'💾 保存到配置',configMgr:'💾 配置管理',
+      exportCurr:'📤 导出当前',importCurr:'📥 导入当前',
+      load:'加载',del:'删除',exp:'导出',imp:'导入',save:'保存',emptySlot:'空槽位',current:'当前',
+      keyLog:'📋 按键日志',keyStats:'📊 按键统计',clear:'清空',reset:'重置',
+      aboutTitle:'关于',author:'作者',license:'许可证',dev:'开发',devText:'在 MimoV2.5Pro 协助下开发',
+      waitLog:'等待自动模式按键...',saveSlotTitle:'💾 保存到配置',saveSlotSub:'选择目标槽位：',
+      confirm:'确定断开当前连接并重新配对？',enterName:'输入配置名称：',
+      delConfirm:'确定删除槽位%d的配置？',saved:'已保存到槽位%d',loaded:'已加载：',
+      applied:'已应用！',deleted:'已删除',imported:'导入成功！',
+      keyCol:'按键',countCol:'次数',pctCol:'比例',
+      bleConnected:'BLE: ✓已连接',bleAdv:'BLE: 广播中',bleOff:'BLE: ✕已停止',
+      autoOn:'AUTO: ON',autoOff:'AUTO: OFF'},
+  en:{pair:'Pair',theme:'Theme',langBtn:'中',about:'About',
+      autoMode:'⚙️ Auto Mode',on:'▶ Start',off:'⏹ Stop',
+      interval:'Interval',hold:'Hold',total:'Total',
+      wForward:'W Forward',wBack:'S Back',wLeft:'A Left',wRight:'D Right',
+      tLeft:'← Turn L',tRight:'→ Turn R',jump:'Space Jump',crouch:'C Crouch',prone:'Z Prone',idle:'Idle',
+      apply:'✅ Apply',saveTo:'💾 Save to Slot',configMgr:'💾 Config Manager',
+      exportCurr:'📤 Export',importCurr:'📥 Import',
+      load:'Load',del:'Delete',exp:'Export',imp:'Import',save:'Save',emptySlot:'Empty',current:'Active',
+      keyLog:'📋 Key Log',keyStats:'📊 Key Stats',clear:'Clear',reset:'Reset',
+      aboutTitle:'About',author:'Author',license:'License',dev:'Developed',devText:'with MimoV2.5Pro',
+      waitLog:'Waiting for auto mode keys...',saveSlotTitle:'💾 Save to Slot',saveSlotSub:'Select target slot:',
+      confirm:'Disconnect and re-pair?',enterName:'Enter config name:',
+      delConfirm:'Delete slot %d?',saved:'Saved to slot %d',loaded:'Loaded: ',
+      applied:'Applied!',deleted:'Deleted',imported:'Imported!',
+      keyCol:'Key',countCol:'Count',pctCol:'Ratio',
+      bleConnected:'BLE: ✓Connected',bleAdv:'BLE: Advertising',bleOff:'BLE: ✕Stopped',
+      autoOn:'AUTO: ON',autoOff:'AUTO: OFF'}
+};
+function L(k){return i18n[lang][k]||k;}
+function toggleLang(){
+  lang=lang==='zh'?'en':'zh';
+  localStorage.setItem('lang',lang);
+  applyLang();
+}
+function applyLang(){
+  var d=i18n[lang];
+  // Banner
+  document.getElementById('btnPair').textContent=d.pair;
+  document.getElementById('btnAbout').textContent=d.about;
+  document.getElementById('btnLang').textContent=d.langBtn;
+  document.getElementById('themeBtn').textContent=d.theme;
+  // About Modal
+  document.getElementById('aboutTitle').textContent=d.aboutTitle;
+  document.getElementById('aboutAuthor').textContent=d.author;
+  document.getElementById('aboutLicense').textContent=d.license;
+  document.getElementById('aboutDev').textContent=d.dev;
+  document.getElementById('aboutDevText').textContent=d.devText;
+  document.getElementById('aboutClose').textContent=d.aboutTitle;
+  // Auto Mode Panel
+  document.getElementById('lblAutoMode').textContent=d.autoMode;
+  document.getElementById('lblInterval').textContent=d.interval;
+  document.getElementById('lblHold').textContent=d.hold;
+  document.getElementById('lblWF').textContent=d.wForward;
+  document.getElementById('lblWS').textContent=d.wBack;
+  document.getElementById('lblWA').textContent=d.wLeft;
+  document.getElementById('lblWD').textContent=d.wRight;
+  document.getElementById('lblWTL').textContent=d.tLeft;
+  document.getElementById('lblWTR').textContent=d.tRight;
+  document.getElementById('lblWSP').textContent=d.jump;
+  document.getElementById('lblWC').textContent=d.crouch;
+  document.getElementById('lblWZ').textContent=d.prone;
+  document.getElementById('lblWId').textContent=d.idle;
+  document.getElementById('lblTotal').textContent=d.total;
+  document.getElementById('btnApply').textContent=d.apply;
+  document.getElementById('btnSaveTo').textContent=d.saveTo;
+  // Config Manager
+  document.getElementById('lblConfigMgr').textContent=d.configMgr;
+  document.getElementById('btnExportCurr').textContent=d.exportCurr;
+  document.getElementById('lblImportCurrText').textContent=d.importCurr;
+  // Key Log & Stats
+  document.getElementById('lblKeyLog').textContent=d.keyLog;
+  document.getElementById('lblKeyStats').textContent=d.keyStats;
+  document.getElementById('btnClearLog').textContent=d.clear;
+  document.getElementById('btnResetStats').textContent=d.reset;
+  document.getElementById('lblKeyCol').textContent=d.keyCol;
+  document.getElementById('lblCountCol').textContent=d.countCol;
+  document.getElementById('lblPctCol').textContent=d.pctCol;
+  document.getElementById('lblTotalRow').textContent=d.total;
+  document.getElementById('lblWaitLog').textContent=d.waitLog;
+  // Slot Modal
+  document.getElementById('slotModalTitle').textContent=d.saveSlotTitle;
+  document.getElementById('slotModalSub').textContent=d.saveSlotSub;
+  document.getElementById('btnSlotCancel').textContent=d.clear?d.clear:'Cancel';
+  // Stats labels
+  statsKeyLabels=[d.wForward,d.wBack,d.wLeft,d.wRight,d.tLeft,d.tRight,d.jump,d.crouch,d.prone,d.idle];
+  renderStats();
+}
+(function(){var s=localStorage.getItem('lang');if(s){lang=s;applyLang();}})();
+
+loadCfg();updStatus();setInterval(updStatus,1000);setInterval(pollEvents,500);updStats();setInterval(updStats,2000);loadSlots();
 )rawliteral";
 }

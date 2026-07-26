@@ -4,9 +4,10 @@
 #include <Arduino.h>
 #include "config.h"
 
-// 按键事件结构体
+// 按键事件结构体（同时保留可读名称与索引，避免依赖 String 的旧路径）
 struct KeyEvent {
-  String keyName;        // 按键名称（如 "W", "Space"）
+  String keyName;        // 按键名称（如 "W", "Space"），用于现有 API 输出
+  uint8_t keyIndex;      // 按键索引，0-9，便于高性能路径使用
   bool pressed;          // true=按下, false=释放
   unsigned long timestamp; // millis() 时间戳
   uint32_t eventId;      // 递增事件ID，用于增量拉取
@@ -70,6 +71,10 @@ public:
   void update();
   String getCurrentKeyName();  // 返回当前按下的键名（用于网页高亮）
 
+  // 工具方法：索引/名称转换（供 web_server 使用）
+  static String indexToName(uint8_t index);
+  static const char* indexToNameCStr(uint8_t index);
+
   // 按键事件日志
   static const int EVENT_BUFFER_SIZE = 20;
   KeyEvent getEvent(int index) const;      // 获取环形缓冲区中的事件
@@ -78,11 +83,12 @@ public:
 
   // 按键统计
   uint32_t getKeyCount(int index) const;   // 获取某个键的按下次数
-  uint32_t getTotalCount() const;          // 获取总按键次数
+  uint32_t getTotalCount() const;          // 获取总按键次数（缓存实现）
 
 private:
   // 按键计数器（W,S,A,D,TL,TR,SP,C,Z,Idle）
   uint32_t        _keyCounts[10];
+  uint32_t        _totalCount;
   BleKeyboard*    _keyboard;
   AutoModeConfig  _config;
   AutoModeState   _state;

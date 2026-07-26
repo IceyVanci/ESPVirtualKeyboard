@@ -8,7 +8,7 @@
 
 ### 开发板选择
 
-Arduino IDE 菜单：**工具 → 开发板 → esp32 → AirM2M CORE ESP32C3**
+Arduino IDE 菜单：**工具 → 开发板 → esp32 → ESP32C3 Dev Module**
 
 如果找不到此选项，请先安装 ESP32 开发板支持包：
 1. **文件 → 首选项 → 附加开发板管理器网址**，添加：
@@ -71,7 +71,7 @@ pip install esptool
 
 ### Board Selection
 
-Arduino IDE menu: **Tools → Board → esp32 → AirM2M CORE ESP32C3**
+Arduino IDE menu: **Tools → Board → esp32 → ESP32C3 Dev Module**
 
 If this option is not found, install the ESP32 board support package first:
 1. **File → Preferences → Additional Board Manager URLs**, add:

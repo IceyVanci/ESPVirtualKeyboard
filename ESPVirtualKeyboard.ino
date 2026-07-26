@@ -10,7 +10,7 @@
  * 
  * 使用方法：
  * 1. 修改 config.h 中的 WiFi SSID 和密码
- * 2. Arduino IDE 选择 AirM2M CORE ESP32C3
+ * 2. Arduino IDE 选择 ESP32C3 Dev Module
  * 3. 烧录后打开串口监视器查看 IP 地址
  * 4. 浏览器访问 IP 地址打开控制面板
  * 5. 在 Windows 蓝牙设置中配对 "ESP32 Keyboard"

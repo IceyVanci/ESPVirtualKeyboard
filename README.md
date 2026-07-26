@@ -8,6 +8,10 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 
 ## 中文
 
+### 📚 文档
+
+详细文档请参阅 [docs/INDEX.md](./docs/INDEX.md) 文档目录。
+
 ### 功能特性
 
 - **BLE 蓝牙键盘**：通过 BLE HID 协议模拟标准键盘，支持所有常用按键
@@ -32,7 +36,7 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 ### 硬件要求
 
 - **开发板**：合宙 ESP32C3-CORE（或其他 ESP32-C3 开发板）
-- **Arduino IDE**：选择 `AirM2M CORE ESP32C3` 开发板
+- **Arduino IDE**：选择 `ESP32C3 Dev Module` 开发板
 - **Flash Mode**：DIO
 
 ### 快速开始
@@ -40,7 +44,7 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 1. 克隆本项目
 2. 修改 `config.h` 中的 WiFi SSID 和密码
 3. Arduino IDE 打开 `ESPVirtualKeyboard.ino`
-4. 选择开发板 `AirM2M CORE ESP32C3`
+4. 选择开发板 `ESP32C3 Dev Module`
 5. **设置关键选项**（详见 [Arduino 写入设置指南](ARDUINO_SETUP.md)）：
    - Partition Scheme → `Huge APP (3MB No OTA)`
    - USB CDC On Boot → `Enabled`
@@ -68,6 +72,10 @@ config_manager.h/cpp   - 配置管理（NVS 持久化、槽位管理、JSON 导�
 
 ## English
 
+### 📚 Documentation
+
+See [docs/INDEX.md](./docs/INDEX.md) for detailed documentation.
+
 ### Features
 
 - **BLE Keyboard**: Standard HID keyboard emulation over Bluetooth Low Energy
@@ -92,7 +100,7 @@ This project uses the Luat ESP32C3 as a validation board, but based on some of i
 ### Hardware Requirements
 
 - **Board**: ESP32-C3 (Luat ESP32C3-CORE or similar)
-- **Arduino IDE**: Select `AirM2M CORE ESP32C3`
+- **Arduino IDE**: Select `ESP32C3 Dev Module`
 - **Flash Mode**: DIO
 
 ### Quick Start
@@ -100,7 +108,7 @@ This project uses the Luat ESP32C3 as a validation board, but based on some of i
 1. Clone this repository
 2. Edit `config.h` with your WiFi SSID and password
 3. Open `ESPVirtualKeyboard.ino` in Arduino IDE
-4. Select board `AirM2M CORE ESP32C3`
+4. Select board `ESP32C3 Dev Module`
 5. **Set critical options** (see [Arduino Setup Guide](ARDUINO_SETUP.md)):
    - Partition Scheme → `Huge APP (3MB No OTA)`
    - USB CDC On Boot → `Enabled`

@@ -4,7 +4,7 @@
 AutoMode::AutoMode(BleKeyboard* keyboard)
   : _keyboard(keyboard), _state(AUTO_IDLE), _lastActionTime(0),
     _nextInterval(0), _currentHoldTime(0), _currentKey(0),
-    _eventWritePos(0), _eventCounter(0) {
+    _eventWritePos(0), _eventCounter(0), _totalCount(0) {
   randomSeed(analogRead(0)); // 初始化随机数种子
   memset(_keyCounts, 0, sizeof(_keyCounts));
 }
@@ -214,6 +214,7 @@ float AutoMode::boxMullerRandom(float mean, float stddev) {
 void AutoMode::logKeyEvent(const String& keyName, bool pressed) {
   _eventCounter++;
   _events[_eventWritePos].keyName = keyName;
+  _events[_eventWritePos].keyIndex = (uint8_t)keyNameToIndex(keyName);
   _events[_eventWritePos].pressed = pressed;
   _events[_eventWritePos].timestamp = millis();
   _events[_eventWritePos].eventId = _eventCounter;
@@ -221,7 +222,7 @@ void AutoMode::logKeyEvent(const String& keyName, bool pressed) {
   // 按下时递增计数器
   if (pressed) {
     int idx = keyNameToIndex(keyName);
-    if (idx >= 0 && idx < 10) _keyCounts[idx]++;
+    if (idx >= 0 && idx < 10) { _keyCounts[idx]++; _totalCount++; }
   }
 }
 
@@ -264,9 +265,41 @@ uint32_t AutoMode::getKeyCount(int index) const {
 }
 
 uint32_t AutoMode::getTotalCount() const {
-  uint32_t total = 0;
-  for (int i = 0; i < 10; i++) total += _keyCounts[i];
-  return total;
+  return _totalCount;
+}
+
+// ========== 静态工具方法：索引/名称转换 ==========
+
+String AutoMode::indexToName(uint8_t index) {
+  switch (index) {
+    case 0: return "w";
+    case 1: return "s";
+    case 2: return "a";
+    case 3: return "d";
+    case 4: return "left";
+    case 5: return "right";
+    case 6: return "space";
+    case 7: return "c";
+    case 8: return "z";
+    case 9: return "";
+    default: return "";
+  }
+}
+
+const char* AutoMode::indexToNameCStr(uint8_t index) {
+  switch (index) {
+    case 0: return "w";
+    case 1: return "s";
+    case 2: return "a";
+    case 3: return "d";
+    case 4: return "left";
+    case 5: return "right";
+    case 6: return "space";
+    case 7: return "c";
+    case 8: return "z";
+    case 9: return "";
+    default: return "";
+  }
 }
 
 int AutoMode::keyNameToIndex(const String& keyName) {

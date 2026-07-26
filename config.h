@@ -3,8 +3,8 @@
 
 // ========== WiFi 配置 ==========
 // 请修改为你家的 WiFi 信息
-#define WIFI_SSID     "YOUR_WIFI_NAME"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID     "Debug"
+#define WIFI_PASSWORD "12345678"
 
 // ========== BLE 配置 ==========
 #define BLE_DEVICE_NAME "ESP Virtual Keyboard"
