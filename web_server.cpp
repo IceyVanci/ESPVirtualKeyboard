@@ -2,6 +2,7 @@
 #include "ble_keyboard.h"
 #include "auto_mode.h"
 #include "config_manager.h"
+#include <esp_system.h>
 
 WebController::WebController(BleKeyboard* keyboard, AutoMode* autoMode, ConfigManager* configMgr)
   : _server(nullptr), _keyboard(keyboard), _autoMode(autoMode), _configMgr(configMgr) {
@@ -17,6 +18,13 @@ void WebController::begin() {
   _server->on("/api/events", HTTP_GET, [this]() { handleEvents(); });
   _server->on("/api/stats", HTTP_GET, [this]() { handleStats(); });
   _server->on("/api/ble/reboot", HTTP_POST, [this]() { handleBleReboot(); });
+  _server->on("/api/ble/name", HTTP_ANY, [this]() { handleBleName(); });
+#ifdef ENABLE_WEB_AUTH
+  // 认证
+  _server->on("/api/login", HTTP_POST, [this]() { handleLogin(); });
+  _server->on("/api/logout", HTTP_POST, [this]() { handleLogout(); });
+  _server->on("/api/auth/change", HTTP_POST, [this]() { handleAuthChange(); });
+#endif
   // 配置槽位管理
   _server->on("/api/slots", HTTP_GET, [this]() { handleSlots(); });
   _server->on("/api/slot/save", HTTP_POST, [this]() { handleSlotSave(); });
@@ -47,6 +55,7 @@ _server->sendContent("<title>ESP Virtual Keyboard</title>");
 }
 
 void WebController::handleKeyPress() {
+  if (!authGuard()) return;
   if (!_server->hasArg("key")) { _server->send(400, "application/json", "{\"error\":\"no key\"}"); return; }
   uint8_t k = mapWebKeyToHid(_server->arg("key"));
   if (k == 0xFF) { _server->send(400, "application/json", "{\"error\":\"unknown\"}"); return; }
@@ -55,6 +64,7 @@ void WebController::handleKeyPress() {
 }
 
 void WebController::handleKeyRelease() {
+  if (!authGuard()) return;
   if (!_server->hasArg("key")) { _server->send(400, "application/json", "{\"error\":\"no key\"}"); return; }
   uint8_t k = mapWebKeyToHid(_server->arg("key"));
   if (k == 0xFF) { _server->send(400, "application/json", "{\"error\":\"unknown\"}"); return; }
@@ -82,6 +92,7 @@ void WebController::handleConfig() {
     j += ",\"weightIdle\":" + String(c.idleWeight,2) + "}";
     _server->send(200, "application/json", j);
   } else {
+    if (!authGuard()) return;
     AutoModeConfig c = _autoMode->getConfig();
     if (_server->hasArg("enabled")) c.enabled = _server->arg("enabled")=="true";
     if (_server->hasArg("minInterval")) c.minIntervalMs = _server->arg("minInterval").toInt();
@@ -118,9 +129,130 @@ void WebController::handleStatus() {
 }
 
 void WebController::handleBleReboot() {
+  if (!authGuard()) return;
   _keyboard->disconnectAndReboot();
   _server->send(200, "application/json", "{\"ok\":true,\"msg\":\"已断开并重新广播\"}");
 }
+
+void WebController::handleBleName() {
+  if (_server->method() == HTTP_GET) {
+    String name = _configMgr ? _configMgr->getBleName() : String(BLE_DEVICE_NAME);
+    _server->send(200, "application/json", "{\"name\":\"" + name + "\"}");
+    return;
+  }
+  if (!authGuard()) return;
+  if (!_server->hasArg("name")) {
+    _server->send(400, "application/json", "{\"error\":\"missing name\"}");
+    return;
+  }
+  String name = _server->arg("name");
+  if (!_configMgr || !_configMgr->setBleName(name)) {
+    _server->send(400, "application/json", "{\"error\":\"invalid length\"}");
+    return;
+  }
+  // 保存成功后重启 BLE，使新名称生效（当前连接会被断开）
+  _keyboard->setDeviceName(_configMgr->getBleName());
+  _keyboard->end();
+  _keyboard->begin();
+  _server->send(200, "application/json", "{\"ok\":true,\"msg\":\"已保存，请重新配对\"}");
+}
+
+// ========== 认证（ENABLE_WEB_AUTH 启用时生效） ==========
+
+bool WebController::authGuard() {
+#ifdef ENABLE_WEB_AUTH
+  if (_authToken.length() == 0 || !_server->hasArg("token") || _server->arg("token") != _authToken) {
+    _server->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return false;
+  }
+#endif
+  return true;
+}
+
+void WebController::handleLogin() {
+#ifdef ENABLE_WEB_AUTH
+  unsigned long now = millis();
+  if (now < _authLockUntil) {
+    _server->send(429, "application/json", "{\"error\":\"locked\",\"retry\":" + String((_authLockUntil - now) / 1000) + "}");
+    return;
+  }
+  if (!_server->hasArg("user") || !_server->hasArg("pass")) {
+    _server->send(400, "application/json", "{\"error\":\"missing user or pass\"}");
+    return;
+  }
+  String user = _server->arg("user");
+  String pass = _server->arg("pass");
+  if (user == _configMgr->getAuthUser() && ConfigManager::sha256Hex(pass) == _configMgr->getAuthPass()) {
+    _authFailCount = 0;
+    _authToken = generateToken();
+    _server->send(200, "application/json", "{\"ok\":true,\"token\":\"" + _authToken + "\"}");
+  } else {
+    _authFailCount++;
+    if (_authFailCount >= WEB_AUTH_LOCKOUT_THRESHOLD) {
+      _authLockUntil = now + WEB_AUTH_LOCKOUT_MS;
+      _authFailCount = 0;
+    }
+    _server->send(401, "application/json", "{\"error\":\"invalid\"}");
+  }
+#else
+  _server->send(404, "application/json", "{\"error\":\"not found\"}");
+#endif
+}
+
+void WebController::handleLogout() {
+#ifdef ENABLE_WEB_AUTH
+  if (!authGuard()) return;
+  _authToken = "";
+  _server->send(200, "application/json", "{\"ok\":true}");
+#else
+  _server->send(404, "application/json", "{\"error\":\"not found\"}");
+#endif
+}
+
+void WebController::handleAuthChange() {
+#ifdef ENABLE_WEB_AUTH
+  unsigned long now = millis();
+  if (now < _authLockUntil) {
+    _server->send(429, "application/json", "{\"error\":\"locked\",\"retry\":" + String((_authLockUntil - now) / 1000) + "}");
+    return;
+  }
+  if (!_server->hasArg("oldUser") || !_server->hasArg("oldPass") ||
+      !_server->hasArg("newUser") || !_server->hasArg("newPass")) {
+    _server->send(400, "application/json", "{\"error\":\"missing fields\"}");
+    return;
+  }
+  String oldUser = _server->arg("oldUser");
+  String oldPass = _server->arg("oldPass");
+  if (oldUser == _configMgr->getAuthUser() && ConfigManager::sha256Hex(oldPass) == _configMgr->getAuthPass()) {
+    if (_configMgr->setAuthCredentials(_server->arg("newUser"), _server->arg("newPass"))) {
+      _authToken = "";
+      _server->send(200, "application/json", "{\"ok\":true}");
+    } else {
+      _server->send(400, "application/json", "{\"error\":\"invalid length\"}");
+    }
+  } else {
+    _authFailCount++;
+    if (_authFailCount >= WEB_AUTH_LOCKOUT_THRESHOLD) {
+      _authLockUntil = now + WEB_AUTH_LOCKOUT_MS;
+      _authFailCount = 0;
+    }
+    _server->send(401, "application/json", "{\"error\":\"invalid\"}");
+  }
+#else
+  _server->send(404, "application/json", "{\"error\":\"not found\"}");
+#endif
+}
+
+#ifdef ENABLE_WEB_AUTH
+String WebController::generateToken() {
+  const char* hex = "0123456789abcdef";
+  String t = "";
+  for (int i = 0; i < 16; i++) {
+    t += String(hex[esp_random() & 0x0F]);
+  }
+  return t;
+}
+#endif
 
 void WebController::handleStats() {
   String keys[10] = {"W","S","A","D","TL","TR","SP","C","Z","Idle"};
@@ -222,6 +354,7 @@ void WebController::handleSlots() {
 }
 
 void WebController::handleSlotSave() {
+  if (!authGuard()) return;
   if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
   if (!_server->hasArg("slot") || !_server->hasArg("name")) {
     _server->send(400, "application/json", "{\"error\":\"missing slot or name\"}");
@@ -242,6 +375,7 @@ void WebController::handleSlotSave() {
 }
 
 void WebController::handleSlotLoad() {
+  if (!authGuard()) return;
   if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
   if (!_server->hasArg("slot")) {
     _server->send(400, "application/json", "{\"error\":\"missing slot\"}");
@@ -260,6 +394,7 @@ void WebController::handleSlotLoad() {
 }
 
 void WebController::handleSlotDelete() {
+  if (!authGuard()) return;
   if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
   if (!_server->hasArg("slot")) {
     _server->send(400, "application/json", "{\"error\":\"missing slot\"}");
@@ -289,6 +424,7 @@ void WebController::handleSlotExport() {
 }
 
 void WebController::handleSlotImport() {
+  if (!authGuard()) return;
   if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
   if (!_server->hasArg("slot") || !_server->hasArg("json")) {
     _server->send(400, "application/json", "{\"error\":\"missing slot or json\"}");
@@ -325,6 +461,7 @@ void WebController::handleConfigExport() {
 }
 
 void WebController::handleConfigImport() {
+  if (!authGuard()) return;
   if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
   if (!_server->hasArg("json")) {
     _server->send(400, "application/json", "{\"error\":\"missing json\"}");
@@ -344,7 +481,7 @@ void WebController::handleConfigImport() {
 // ========== HTML ==========
 
 String WebController::generateHTML() {
-  return R"rawliteral(
+  String html = R"rawliteral(
 <div class="top-bar">
   <div class="brand">ESP Virtual Keyboard</div>
     <div class="stats">
@@ -352,6 +489,9 @@ String WebController::generateHTML() {
     <span id="autoSt" class="tag tag-off">AUTO: OFF</span>
     <span id="upSt" class="tag">00:00:00</span>
     <span id="clockSt" class="tag">--:--:--</span>
+    <button class="top-btn" onclick="toggleKbMode()" id="btnMode">🎹 键盘模式</button>
+    <button class="top-btn" onclick="openBleNameModal()" id="btnBleName">📡 蓝牙名</button>
+    __AUTH_BTNS__
     <button class="top-btn top-btn-warn" onclick="bleReboot()" id="btnPair">配对</button>
     <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">明暗</button>
     <button class="top-btn" onclick="toggleLang()" id="btnLang">En</button>
@@ -410,6 +550,7 @@ String WebController::generateHTML() {
 
   <!-- 键盘 -->
   <div class="kb-wrap">
+    <div class="kb-inner" id="kbInner">
     <div class="kb">
       <!-- F行 Esc + F1-F12 + PrtSc/ScrLk/Pause -->
       <div class="kb-row">
@@ -569,6 +710,7 @@ String WebController::generateHTML() {
           <div class="k-gap-fill"></div>
         </div>
       </div>
+    </div>
   </div>
 
   <!-- 按键日志 & 统计 -->
@@ -616,6 +758,66 @@ String WebController::generateHTML() {
 
 </div>
 )rawliteral";
+
+  // 蓝牙名称设置弹窗
+  html += R"rawliteral(
+<div id="bleNameModal" class="modal-overlay" style="display:none">
+  <div class="modal-card">
+    <div class="modal-title" id="bleNameTitle">📡 蓝牙名</div>
+    <div class="modal-subtitle" id="bleNameSub">修改后 BLE 将重启，需重新配对</div>
+    <input id="bleNameInput" class="modal-input" maxlength="24" placeholder="ESP Virtual Keyboard">
+    <div class="btn-row">
+      <button class="btn btn-blue btn-half" onclick="doSaveBleName()" id="bleNameSaveBtn">保存</button>
+      <button class="btn btn-red btn-half" onclick="closeBleNameModal()" id="bleNameCancelBtn">取消</button>
+    </div>
+  </div>
+</div>
+  )rawliteral";
+
+#ifdef ENABLE_WEB_AUTH
+  // 登录 / 修改密码弹窗（仅 ENABLE_WEB_AUTH 时渲染）
+  html += R"rawliteral(
+<div id="loginModal" class="modal-overlay" style="display:none">
+  <div class="modal-card">
+    <div class="modal-title">登录</div>
+    <div class="modal-subtitle">输入管理凭据以控制设备</div>
+    <input id="loginUser" class="modal-input" placeholder="用户名" autocomplete="username">
+    <input id="loginPass" class="modal-input" type="password" placeholder="密码" autocomplete="current-password">
+    <div class="btn-row">
+      <button class="btn btn-blue btn-half" onclick="doLogin()">登录</button>
+      <button class="btn btn-red btn-half" onclick="closeLogin()">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="pwdModal" class="modal-overlay" style="display:none">
+  <div class="modal-card">
+    <div class="modal-title">修改密码</div>
+    <div class="modal-subtitle">需验证当前凭据</div>
+    <input id="pwdOldUser" class="modal-input" placeholder="当前用户名" autocomplete="username">
+    <input id="pwdOldPass" class="modal-input" type="password" placeholder="当前密码" autocomplete="current-password">
+    <input id="pwdNewUser" class="modal-input" placeholder="新用户名" autocomplete="username">
+    <input id="pwdNewPass" class="modal-input" type="password" placeholder="新密码" autocomplete="new-password">
+    <div class="btn-row">
+      <button class="btn btn-blue btn-half" onclick="doChangePwd()">确认修改</button>
+      <button class="btn btn-red btn-half" onclick="closePwdModal()">取消</button>
+    </div>
+  </div>
+</div>
+  )rawliteral";
+#endif
+
+  // 顶部栏认证按钮（未启用 ENABLE_WEB_AUTH 时不渲染）
+  String authBtns = "";
+#ifdef ENABLE_WEB_AUTH
+  authBtns = "<button class=\"top-btn\" onclick=\"toggleLogin()\" id=\"btnLogin\" title=\"登录\">🔒</button><button class=\"top-btn\" onclick=\"openPwdModal()\" id=\"btnChgPwd\" title=\"修改密码\">🔑 修改密码</button>";
+#endif
+  html.replace("__AUTH_BTNS__", authBtns);
+
+  // 页面底部：版本与固件生成日期
+  html += "<div class=\"footer\">ESP Virtual Keyboard " FW_VERSION " · Build " FW_BUILD_DATE " " FW_BUILD_TIME "</div>";
+
+  return html;
 }
 
 // ========== CSS ==========
@@ -664,7 +866,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .wt-total{margin-top:6px;padding:4px 0;font-size:0.82em;text-align:right;color:var(--dim)}
 .wt-total .ok{color:var(--green);font-weight:600}
 .wt-total .over{color:var(--red);font-weight:600}
-.kb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;justify-content:center;align-items:flex-start;gap:14px;overflow-x:auto}
+.kb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;justify-content:center;align-items:flex-start;overflow-x:auto}
+.kb-inner{display:flex;align-items:flex-start;gap:14px;flex-shrink:0;transform-origin:center top;will-change:transform}
+body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
 .kb{display:inline-flex;flex-direction:column;gap:4px}
 .kb-row{display:flex;gap:3px}
 .kb-right{display:flex;flex-direction:column;gap:3px}
@@ -758,6 +962,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .about-ver{font-size:0.85em;color:var(--dim);margin-bottom:12px}
 .about-row{display:flex;gap:10px;padding:4px 0;font-size:0.88em;border-bottom:1px solid rgba(48,54,61,0.3)}
 .about-label{color:var(--dim);min-width:48px;font-weight:600}
+.modal-input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--key-bg);color:var(--text);margin-bottom:8px;font-size:0.85em}
+.modal-input:focus{outline:none;border-color:var(--accent)}
+.footer{max-width:1200px;margin:12px auto 0;padding:10px 12px;font-size:0.72em;color:var(--dim);text-align:center;border-top:1px solid var(--border)}
 @media(max-width:768px){
   .ctrl-grid,.log-stats-grid{grid-template-columns:1fr}
   .kb-wrap{padding:8px}
@@ -776,7 +983,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 // ========== JavaScript ==========
 
 String WebController::generateJS() {
-  return R"rawliteral(
+  String js = R"rawliteral(
 var autoOn=false;
 
 document.querySelectorAll('.k[data-k]').forEach(function(k){
@@ -1009,6 +1216,50 @@ function toggleTheme(){
 }
 (function(){var s=localStorage.getItem('theme');if(s==='light'){document.documentElement.setAttribute('data-theme','light');document.getElementById('themeBtn').textContent='☀️';}})();
 
+// ---- 键盘模式切换与自适应缩放 ----
+function isKbMode(){return document.body.classList.contains('kb-mode');}
+function updateModeBtn(){
+  var b=document.getElementById('btnMode');
+  if(b)b.textContent=isKbMode()?L('modeFull'):L('modeKb');
+}
+function toggleKbMode(){
+  document.body.classList.toggle('kb-mode');
+  localStorage.setItem('kbMode',isKbMode()?'1':'0');
+  updateModeBtn();
+  fitKeyboard();
+}
+function fitKeyboard(){
+  var wrap=document.querySelector('.kb-wrap');
+  var inner=document.getElementById('kbInner');
+  if(!wrap||!inner)return;
+  var cs=getComputedStyle(wrap);
+  var pad=(parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0);
+  var avail=wrap.clientWidth-pad;
+  var natW=inner.scrollWidth;
+  if(natW<=0||avail<=0)return;
+  var s=avail/natW;
+  if(s>=1){inner.style.transform='';wrap.style.height='';return;}
+  inner.style.transform='scale('+s+')';
+  wrap.style.height=(inner.offsetHeight*s)+'px';
+}
+
+// ---- 蓝牙名称设置 ----
+function openBleNameModal(){
+  fetch('/api/ble/name').then(function(r){return r.json()}).then(function(d){
+    document.getElementById('bleNameInput').value=d.name||'';
+    document.getElementById('bleNameModal').style.display='flex';
+  }).catch(function(){});
+}
+function closeBleNameModal(){document.getElementById('bleNameModal').style.display='none';}
+function doSaveBleName(){
+  var n=document.getElementById('bleNameInput').value.trim();
+  if(!n){alert(L('bleNameInvalid'));return;}
+  fetch('/api/ble/name',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'name='+encodeURIComponent(n)}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){closeBleNameModal();alert(d.msg||L('bleNameSaved'));}
+    else{alert(L('bleNameInvalid'));}
+  }).catch(function(){});
+}
+
 // ---- 配置槽位管理 ----
 var slotData=[];
 
@@ -1139,7 +1390,11 @@ var i18n={
       applied:'已应用！',deleted:'已删除',imported:'导入成功！',
       keyCol:'按键',countCol:'次数',pctCol:'比例',
       bleConnected:'BLE: ✓已连接',bleAdv:'BLE: 广播中',bleOff:'BLE: ✕已停止',
-      autoOn:'AUTO: ON',autoOff:'AUTO: OFF'},
+      autoOn:'AUTO: ON',autoOff:'AUTO: OFF',
+      modeKb:'🎹 键盘模式',modeFull:'🧩 全功能',
+      bleName:'📡 蓝牙名',bleNameSub:'修改后 BLE 将重启，需重新配对',
+      cancel:'取消',bleNameSaved:'已保存，BLE 已重启，请重新配对',
+      bleNameInvalid:'名称需为 1-24 个字符'},
   en:{pair:'Pair',theme:'Theme',langBtn:'中',about:'About',
       autoMode:'⚙️ Auto Mode',on:'▶ Start',off:'⏹ Stop',
       interval:'Interval',hold:'Hold',total:'Total',
@@ -1156,7 +1411,11 @@ var i18n={
       applied:'Applied!',deleted:'Deleted',imported:'Imported!',
       keyCol:'Key',countCol:'Count',pctCol:'Ratio',
       bleConnected:'BLE: ✓Connected',bleAdv:'BLE: Advertising',bleOff:'BLE: ✕Stopped',
-      autoOn:'AUTO: ON',autoOff:'AUTO: OFF'}
+      autoOn:'AUTO: ON',autoOff:'AUTO: OFF',
+      modeKb:'🎹 Keyboard',modeFull:'🧩 Full',
+      bleName:'📡 BLE Name',bleNameSub:'Changing restarts BLE; re-pair required',
+      cancel:'Cancel',bleNameSaved:'Saved, BLE restarted, please re-pair',
+      bleNameInvalid:'Name must be 1-24 characters'}
 };
 function L(k){return i18n[lang][k]||k;}
 function toggleLang(){
@@ -1213,12 +1472,123 @@ function applyLang(){
   document.getElementById('slotModalTitle').textContent=d.saveSlotTitle;
   document.getElementById('slotModalSub').textContent=d.saveSlotSub;
   document.getElementById('btnSlotCancel').textContent=d.clear?d.clear:'Cancel';
+  // Mode & BLE Name
+  document.getElementById('btnMode').textContent=isKbMode()?d.modeFull:d.modeKb;
+  document.getElementById('btnBleName').textContent=d.bleName;
+  document.getElementById('bleNameTitle').textContent=d.bleName;
+  document.getElementById('bleNameSub').textContent=d.bleNameSub;
+  document.getElementById('bleNameSaveBtn').textContent=d.save;
+  document.getElementById('bleNameCancelBtn').textContent=d.cancel;
   // Stats labels
   statsKeyLabels=[d.wForward,d.wBack,d.wLeft,d.wRight,d.tLeft,d.tRight,d.jump,d.crouch,d.prone,d.idle];
   renderStats();
 }
 (function(){var s=localStorage.getItem('lang');if(s){lang=s;applyLang();}})();
 
+__AUTH_JS__
+
+// 初始键盘模式：有记忆用记忆，无记忆用编译期默认（DEFAULT_KB_ONLY_MODE）
+(function(){
+  var saved=localStorage.getItem('kbMode');
+  var kbMode;
+  if(saved==='1'||saved==='0'){kbMode=(saved==='1');}
+  else{kbMode=(__DEFAULT_KB_MODE__==='1');}
+  if(kbMode)document.body.classList.add('kb-mode');
+  updateModeBtn();
+  fitKeyboard();
+})();
+window.addEventListener('resize',fitKeyboard);
+window.addEventListener('orientationchange',function(){setTimeout(fitKeyboard,200);});
+
 loadCfg();updStatus();setInterval(updStatus,1000);setInterval(pollEvents,500);updStats();setInterval(updStats,2000);loadSlots();
 )rawliteral";
+
+#ifdef ENABLE_WEB_AUTH
+  js.replace("__AUTH_JS__", R"rawliteral(
+// ---- Web 认证（仅 ENABLE_WEB_AUTH 时启用） ----
+var authToken = localStorage.getItem('espAuthToken') || '';
+var loginOpen = false;
+var loginDismissed = false;
+
+(function(){
+  var __of = window.fetch;
+  window.fetch = function(u, o){
+    if (typeof u === 'string' && u.indexOf('/api/') === 0) {
+      u += (u.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(authToken);
+    }
+    return __of(u, o).then(function(r){
+      if (r.status === 401 && u.indexOf('/api/login') < 0 && u.indexOf('/api/auth/change') < 0 && !loginOpen && !loginDismissed) {
+        openLogin();
+      }
+      return r;
+    });
+  };
+})();
+
+function updateLoginBtn(){
+  var b = document.getElementById('btnLogin');
+  if (b) b.textContent = authToken ? '🔓' : '🔒';
+}
+function openLogin(){loginOpen=true;loginDismissed=false;document.getElementById('loginModal').style.display='flex';}
+function closeLogin(){loginOpen=false;loginDismissed=true;document.getElementById('loginModal').style.display='none';}
+function openPwdModal(){loginDismissed=false;document.getElementById('pwdModal').style.display='flex';}
+function closePwdModal(){loginDismissed=false;document.getElementById('pwdModal').style.display='none';}
+
+function doLogin(){
+  var u = document.getElementById('loginUser').value;
+  var p = document.getElementById('loginPass').value;
+  fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'user='+encodeURIComponent(u)+'&pass='+encodeURIComponent(p)}).then(function(r){return r.json()}).then(function(d){
+    if (d.ok) {
+      authToken = d.token;
+      localStorage.setItem('espAuthToken', authToken);
+      closeLogin();
+      updateLoginBtn();
+      updStatus();
+    } else {
+      alert(d.error==='locked' ? '尝试次数过多，请稍后再试' : (d.error==='invalid' ? '用户名或密码错误' : '登录失败'));
+    }
+  }).catch(function(){});
+}
+
+function doLogout(){
+  if (!confirm('确定登出当前会话？')) return;
+  fetch('/api/logout',{method:'POST'}).then(function(){
+    authToken = '';
+    localStorage.removeItem('espAuthToken');
+    updateLoginBtn();
+  }).catch(function(){});
+}
+
+function toggleLogin(){
+  if (authToken) { doLogout(); } else { openLogin(); }
+}
+
+function doChangePwd(){
+  var body = 'oldUser='+encodeURIComponent(document.getElementById('pwdOldUser').value)
+           + '&oldPass='+encodeURIComponent(document.getElementById('pwdOldPass').value)
+           + '&newUser='+encodeURIComponent(document.getElementById('pwdNewUser').value)
+           + '&newPass='+encodeURIComponent(document.getElementById('pwdNewPass').value);
+  fetch('/api/auth/change',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).then(function(r){return r.json()}).then(function(d){
+    if (d.ok) {
+      authToken = '';
+      localStorage.removeItem('espAuthToken');
+      closePwdModal();
+      updateLoginBtn();
+      alert('已修改，请使用新凭据登录');
+    } else {
+      alert(d.error==='locked' ? '尝试次数过多，请稍后再试' : (d.error==='invalid' ? '当前凭据错误' : (d.error==='invalid length' ? '用户名/密码需为 1-20 个字符' : '修改失败')));
+    }
+  }).catch(function(){});
+}
+
+updateLoginBtn();
+  )rawliteral");
+#else
+  js.replace("__AUTH_JS__", "");
+#endif
+
+  // 注入编译期默认界面模式
+  js.replace("__DEFAULT_KB_MODE__", String(DEFAULT_KB_ONLY_MODE));
+
+  return js;
 }

@@ -161,4 +161,32 @@
 #define DEFAULT_WEIGHT_Z          0.05   // Z 键（趴下）
 #define DEFAULT_WEIGHT_IDLE       0.08   // 空闲
 
+// ========== Web 认证（可选，默认关闭） ==========
+// 取消下一行注释可启用 Web 控制面板登录验证，防止局域网内任意设备注入按键
+// 启用后：需先通过 /api/login 登录获取 token，写操作接口要求携带 token
+// 默认关闭时，以下所有认证相关功能与页面按钮均不编译，行为与旧版一致
+//#define ENABLE_WEB_AUTH 1
+
+// 首次使用时写入 NVS 的初始凭据（之后以 NVS 为准；修改需清空 NVS 或通过网页修改）
+#define WEB_AUTH_USERNAME "admin"
+#define WEB_AUTH_PASSWORD "12345678"
+
+// 连续登录失败锁定阈值与锁定时间（毫秒）
+#define WEB_AUTH_LOCKOUT_THRESHOLD 5
+#define WEB_AUTH_LOCKOUT_MS 30000
+
+// ========== 固件信息 ==========
+#define FW_VERSION "v1.0"
+#define FW_BUILD_DATE __DATE__   // 编译日期
+#define FW_BUILD_TIME __TIME__   // 编译时间
+
+// ========== 卡键安全超时 ==========
+// Web 面板按下按键后若超过该时间未收到释放（浏览器崩溃/断连等），自动释放所有按键
+#define WEB_KEY_STUCK_TIMEOUT_MS 5000
+
+// ========== 界面默认模式 ==========
+// 1 = 开机默认纯虚拟键盘模式（只显示键盘），0 = 开机默认高级模式（完整控制面板）
+// 运行时切换会被记忆（localStorage），此宏仅在浏览器无记忆时决定初始模式
+#define DEFAULT_KB_ONLY_MODE 0
+
 #endif // CONFIG_H

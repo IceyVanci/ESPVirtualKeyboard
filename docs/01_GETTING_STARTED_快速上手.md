@@ -62,6 +62,8 @@
 3. 找到 `ESP Virtual Keyboard` 并点击配对
 4. 配对成功后，串口监视器会显示 "设备已连接"
 
+> **提示**：设备名称可在 Web 控制面板顶部的「📡 蓝牙名」按钮处修改（修改后 BLE 重启，需重新配对）。若已改名，请以实际显示名称为准。
+
 ### 2. 访问控制面板
 
 1. 在手机或电脑浏览器中打开 `http://<IP地址>`（例如 `http://192.168.1.100`）
@@ -164,6 +166,8 @@
 2. Search for Bluetooth devices
 3. Find `ESP Virtual Keyboard` and click Pair
 4. After pairing, the serial monitor will show "设备已连接" (Device connected)
+
+> **Note**: The device name can be changed via the "📡 BLE Name" button at the top of the web panel (BLE restarts after change; re-pair required). If renamed, use the actual displayed name.
 
 ### 2. Access Control Panel
 

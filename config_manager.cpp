@@ -1,11 +1,20 @@
 #include "config_manager.h"
 
+#include <mbedtls/md.h>
+#include <stdio.h>
+
 // ========== 构造与初始化 ==========
 
 ConfigManager::ConfigManager() {}
 
 void ConfigManager::begin() {
   _prefs.begin("cfgmgr", false);  // NVS namespace "cfgmgr", read-write
+#ifdef ENABLE_WEB_AUTH
+  // 首次启动时以 config.h 默认值初始化认证凭据（之后以 NVS 为准）
+  if (!hasAuthCredentials()) {
+    setAuthCredentials(WEB_AUTH_USERNAME, WEB_AUTH_PASSWORD);
+  }
+#endif
 }
 
 // ========== NVS Key 命名 ==========
@@ -28,7 +37,8 @@ bool ConfigManager::saveSlot(int slotIndex, const String& name, const AutoModeCo
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
   String trimmed = name.substring(0, SLOT_NAME_MAX_LEN);
   _prefs.putString(slotNameKey(slotIndex).c_str(), trimmed);
-  _prefs.putBytes(slotDataKey(slotIndex).c_str(), &config, sizeof(AutoModeConfig));
+  // 使用 JSON 字符串存储，避免结构体内存布局变更导致旧数据损坏
+  _prefs.putString(slotDataKey(slotIndex).c_str(), configToJson(config, trimmed));
   _prefs.putBool(slotUsedKey(slotIndex).c_str(), true);
   return true;
 }
@@ -37,8 +47,24 @@ bool ConfigManager::loadSlot(int slotIndex, AutoModeConfig& config, String& name
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
   if (!_prefs.getBool(slotUsedKey(slotIndex).c_str(), false)) return false;
   name = _prefs.getString(slotNameKey(slotIndex).c_str(), "未命名");
+
+  // 优先读取 JSON 格式（当前版本）
+  String json = _prefs.getString(slotDataKey(slotIndex).c_str(), "");
+  if (json.length() > 0) {
+    String jname;
+    if (jsonToConfig(json, config, jname)) {
+      if (jname.length() > 0) name = jname;
+      return true;
+    }
+  }
+
+  // 回退：旧版原始字节格式（自动迁移为 JSON）
   size_t len = _prefs.getBytes(slotDataKey(slotIndex).c_str(), &config, sizeof(AutoModeConfig));
-  return (len == sizeof(AutoModeConfig));
+  if (len == sizeof(AutoModeConfig)) {
+    _prefs.putString(slotDataKey(slotIndex).c_str(), configToJson(config, name));
+    return true;
+  }
+  return false;
 }
 
 bool ConfigManager::overwriteSlot(int slotIndex, const String& name, const AutoModeConfig& config) {
@@ -257,4 +283,64 @@ String ConfigManager::exportCurrentConfig(const AutoModeConfig& config) {
 bool ConfigManager::importToCurrentConfig(const String& json, AutoModeConfig& config) {
   String name;
   return jsonToConfig(json, config, name);
+}
+
+// ========== 认证凭据（NVS 持久化） ==========
+
+String ConfigManager::sha256Hex(const String& input) {
+  unsigned char hash[32];
+  mbedtls_md_context_t ctx;
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+  mbedtls_md_starts(&ctx);
+  mbedtls_md_update(&ctx, (const unsigned char*)input.c_str(), input.length());
+  mbedtls_md_finish(&ctx, hash);
+  mbedtls_md_free(&ctx);
+
+  String hex = "";
+  char buf[3];
+  for (int i = 0; i < 32; i++) {
+    snprintf(buf, sizeof(buf), "%02x", hash[i]);
+    hex += buf;
+  }
+  return hex;
+}
+
+String ConfigManager::getAuthUser() {
+  String u = _prefs.getString("authuser", "");
+  if (u.length() == 0) return String(WEB_AUTH_USERNAME);
+  return u;
+}
+
+String ConfigManager::getAuthPass() {
+  String h = _prefs.getString("authhash", "");
+  if (h.length() == 0) return sha256Hex(String(WEB_AUTH_PASSWORD));
+  return h;
+}
+
+bool ConfigManager::hasAuthCredentials() {
+  return _prefs.isKey("authuser") && _prefs.isKey("authhash");
+}
+
+bool ConfigManager::setAuthCredentials(const String& user, const String& pass) {
+  if (user.length() == 0 || user.length() > 20) return false;
+  if (pass.length() == 0 || pass.length() > 20) return false;
+  _prefs.putString("authuser", user);
+  _prefs.putString("authhash", sha256Hex(pass));
+  return true;
+}
+
+// ========== 蓝牙设备名称（NVS 持久化） ==========
+
+String ConfigManager::getBleName() {
+  String n = _prefs.getString("blename", "");
+  if (n.length() == 0) return String(BLE_DEVICE_NAME);
+  return n;
+}
+
+bool ConfigManager::setBleName(const String& name) {
+  String trimmed = name.substring(0, 24);
+  if (trimmed.length() == 0) return false;
+  _prefs.putString("blename", trimmed);
+  return true;
 }

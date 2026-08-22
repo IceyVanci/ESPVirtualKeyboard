@@ -35,6 +35,10 @@ BleKeyboard
 ├── isConnected() - 检查 BLE 连接状态
 ├── getState()   - 获取 BLE 状态枚举
 │
+├── setDeviceName(name) - 设置设备名称（需 begin() 前调用，或调用后 end()+begin() 生效）
+├── getDeviceName()     - 获取当前设备名称
+├── checkStuck(timeoutMs) - 卡键安全超时检查（超时自动释放）
+│
 ├── press(keyCode)           - 按下指定键
 ├── release(keyCode)         - 释放指定键
 ├── pressAndRelease(keyCode, holdMs) - 按下并释放（指定持续时间）
@@ -116,6 +120,25 @@ pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 1. **已连接状态**：调用 `pServer->disconnect(0)` 触发 `onDisconnect` 回调，自动重启广播
 2. **未连接状态**：直接停止广播并重新开始
 
+## 修改蓝牙名称
+
+设备名称默认为 `config.h` 中的 `BLE_DEVICE_NAME`，但可运行时修改：
+
+1. Web 控制面板顶部的「📡 蓝牙名」按钮，或调用 `POST /api/ble/name`
+2. 名称保存到 NVS（键 `blename`，最多 24 字符），重启不丢失
+3. 保存成功后调用 `end() + begin()` 重启 BLE，使新名称生效（当前连接会被断开，需重新配对）
+
+> 名称修改后，电脑蓝牙列表中显示新名称；若电脑已缓存旧名称，需在蓝牙设置中删除旧设备后重新搜索。
+
+## 卡键安全超时
+
+Web 面板的按键是"按下/释放"成对发送的。若浏览器崩溃、断网或触摸事件丢失导致释放包未发出，按键会一直卡住。为此提供 `checkStuck(timeoutMs)`：
+
+- 每次 `press()` / `release()` / `releaseAll()` 都会刷新 `_lastKeyActivity`
+- `checkStuck()` 在主循环 `loop()` 中调用：若 BLE 已连接、报告缓冲区非空、且超过 `WEB_KEY_STUCK_TIMEOUT_MS`（默认 5000ms）无任何按键活动，则自动 `releaseAll()` 并打印日志
+
+该机制默认开启，无需配置；超时时间可在 `config.h` 中调整。
+
 ---
 
 # BLE Keyboard Module
@@ -154,6 +177,10 @@ BleKeyboard
 ├── end()        - Stop BLE keyboard
 ├── isConnected() - Check BLE connection status
 ├── getState()   - Get BLE state enum
+│
+├── setDeviceName(name) - Set device name (call before begin(), or end()+begin() to apply)
+├── getDeviceName()     - Get current device name
+├── checkStuck(timeoutMs) - Key-stuck safety check (auto release on timeout)
 │
 ├── press(keyCode)           - Press a key
 ├── release(keyCode)         - Release a key
@@ -235,3 +262,22 @@ pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
 1. **Connected state**: Calls `pServer->disconnect(0)` to trigger `onDisconnect` callback, which auto-restarts advertising
 2. **Disconnected state**: Stops advertising directly and restarts
+
+## Changing the BLE Device Name
+
+The device name defaults to `BLE_DEVICE_NAME` in `config.h`, but can be changed at runtime:
+
+1. Use the "📡 BLE Name" button at the top of the web panel, or call `POST /api/ble/name`
+2. The name is saved to NVS (key `blename`, max 24 chars) and survives reboot
+3. After saving, `end() + begin()` restarts BLE so the new name takes effect (the current connection drops; re-pair required)
+
+> After a rename, the new name appears in the computer's Bluetooth list. If the old name is cached, remove the old device from Bluetooth settings and search again.
+
+## Key-Stuck Safety Timeout
+
+Web panel keys are sent as paired "press/release". If the browser crashes, the network drops, or a touch event is lost, the release packet may never be sent and the key stays stuck. `checkStuck(timeoutMs)` addresses this:
+
+- Every `press()` / `release()` / `releaseAll()` refreshes `_lastKeyActivity`
+- `checkStuck()` is called in the main `loop()`: if BLE is connected, the report buffer is non-empty, and no key activity happens within `WEB_KEY_STUCK_TIMEOUT_MS` (default 5000ms), it auto-calls `releaseAll()` and logs a message
+
+This mechanism is enabled by default and requires no configuration; the timeout can be adjusted in `config.h`.

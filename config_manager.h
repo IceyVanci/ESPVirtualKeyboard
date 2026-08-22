@@ -46,6 +46,17 @@ public:
   String exportCurrentConfig(const AutoModeConfig& config);
   bool importToCurrentConfig(const String& json, AutoModeConfig& config);
 
+  // 认证凭据（NVS 持久化，默认值来自 config.h）
+  String getAuthUser();
+  String getAuthPass();                      // 返回密码 SHA-256 哈希
+  bool hasAuthCredentials();
+  bool setAuthCredentials(const String& user, const String& pass);
+  static String sha256Hex(const String& input);  // SHA-256 十六进制串
+
+  // 蓝牙设备名称（NVS 持久化，默认值来自 config.h）
+  String getBleName();
+  bool setBleName(const String& name);       // 1~24 字符，返回是否成功
+
 private:
   Preferences _prefs;
 

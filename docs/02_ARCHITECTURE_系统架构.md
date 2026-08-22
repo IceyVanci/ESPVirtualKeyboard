@@ -44,6 +44,8 @@ ESP VirtualKeyboard 采用模块化设计，各模块职责清晰、耦合度低
 - 封装 ESP32 BLE HID 协议栈
 - 管理键盘按键状态（按下/释放/报告）
 - 管理蓝牙连接生命周期（广播/连接/断开）
+- 支持运行时修改设备名称（`setDeviceName`，重启 BLE 生效）
+- 卡键安全超时检测（`checkStuck`，超时自动释放所有按键）
 - 提供按键事件驱动 LED 闪烁
 
 ### 自动模式模块 (auto_mode.h/cpp)
@@ -52,16 +54,23 @@ ESP VirtualKeyboard 采用模块化设计，各模块职责清晰、耦合度低
 - Box-Muller 正态分布时间间隔生成
 - 按键事件环形缓冲区（20 条记录）
 - 按键计数统计
+- 参数钳制（interval 100~30000ms、hold 10~5000ms、权重 [0,1]，min≤max 自动交换）
 
 ### Web 服务器模块 (web_server.h/cpp)
-- HTTP API 服务（17 个 REST 端点）
+- HTTP API 服务（20+ 个 REST 端点，含可选认证端点）
 - 完整前端控制面板（HTML/CSS/JS 内嵌）
+- 键盘独占模式（纯虚拟键盘视图，`DEFAULT_KB_ONLY_MODE` 可选默认）
+- 移动端键盘自适应缩放（`fitKeyboard`）
+- 在线修改蓝牙名称（`/api/ble/name`）
+- 可选登录验证（`ENABLE_WEB_AUTH`：`/api/login` `/api/logout` `/api/auth/change`，写操作鉴权）
 - 实时状态轮询、按键日志、统计图表
 - 中英文国际化、明暗主题切换
 
 ### 配置管理器模块 (config_manager.h/cpp)
-- NVS 持久化存储（5 个配置槽位）
-- 活动槽位自动加载
+- NVS 持久化存储（5 个配置槽位，以 JSON 字符串存储）
+- 活动槽位自动加载（旧字节格式自动迁移）
+- 认证凭据持久化（`authuser` / `authhash`，SHA-256）
+- 蓝牙设备名称持久化（`blename`）
 - 手写 JSON 序列化/反序列化（无外部依赖）
 - 配置导入/导出
 
@@ -124,13 +133,15 @@ Serial.begin(115200)  ← 串口初始化
     ↓
 pinMode(LED_D4/LED_D5)  ← LED 初始化 + 开机快闪
     ↓
-connectWiFi()  ← 连接 WiFi（最多等待 20 秒）
+startWiFi()  ← 非阻塞连接 WiFi（开机等待最多 10 秒）
     ↓
 configTime()  ← NTP 时间同步
     ↓
-keyboard.begin()  ← BLE 键盘初始化
+configMgr.begin()  ← 配置管理器初始化（读取 NVS）
     ↓
-configMgr.begin()  ← 配置管理器初始化
+keyboard.setDeviceName(configMgr.getBleName())  ← 应用蓝牙名称
+    ↓
+keyboard.begin()  ← BLE 键盘初始化
     ↓
 loadActiveConfig()  ← 加载上次保存的配置
     ↓
@@ -145,8 +156,9 @@ webCtrl.begin()  ← Web 服务器启动
 loop() 每轮执行:
     ├── webCtrl.handleClient()  ← 处理 HTTP 请求（非阻塞）
     ├── autoMode.update()       ← 自动模式状态机更新
+    ├── keyboard.checkStuck()   ← 卡键安全超时检查（自动释放）
     ├── updateStatusLED()       ← LED 状态指示（非阻塞）
-    └── checkWiFi()             ← 每 30 秒检查 WiFi 连接
+    └── handleWiFi()            ← WiFi 状态机（连接/重连，非阻塞）
 ```
 
 ---
@@ -191,13 +203,15 @@ ESP VirtualKeyboard adopts a modular design with clear responsibilities and low 
 
 ### Main Program (ESPVirtualKeyboard.ino)
 - System initialization: LED, WiFi, NTP, BLE, Config Manager, Web Server
-- Main loop scheduling: HTTP handling, Auto Mode update, LED status, WiFi keepalive
+- Main loop scheduling: HTTP handling, Auto Mode update, key-stuck check, LED status, WiFi state machine
 - LED status indication management
 
 ### BLE Keyboard Module (ble_keyboard.h/cpp)
 - Wraps the ESP32 BLE HID protocol stack
 - Manages keyboard key states (press/release/report)
 - Manages Bluetooth connection lifecycle (advertising/connected/disconnected)
+- Supports runtime device rename (`setDeviceName`, takes effect after BLE restart)
+- Key-stuck safety timeout (`checkStuck`, auto-releases all keys on timeout)
 - Drives LED flashing on key events
 
 ### Auto Mode Module (auto_mode.h/cpp)
@@ -206,16 +220,23 @@ ESP VirtualKeyboard adopts a modular design with clear responsibilities and low 
 - Box-Muller normal distribution timing generation
 - Key event ring buffer (20 entries)
 - Key count statistics
+- Parameter clamping (interval 100-30000ms, hold 10-5000ms, weights [0,1], min/max auto-swap)
 
 ### Web Server Module (web_server.h/cpp)
-- HTTP API service (17 REST endpoints)
+- HTTP API service (20+ REST endpoints, including optional auth endpoints)
 - Complete frontend control panel (HTML/CSS/JS embedded)
+- Keyboard-only mode (pure virtual keyboard view, `DEFAULT_KB_ONLY_MODE` selectable default)
+- Mobile keyboard auto-scaling (`fitKeyboard`)
+- Online BLE rename (`/api/ble/name`)
+- Optional login auth (`ENABLE_WEB_AUTH`: `/api/login` `/api/logout` `/api/auth/change`, write-operation auth)
 - Real-time status polling, key logging, statistics charts
 - Chinese/English i18n, dark/light theme switching
 
 ### Config Manager Module (config_manager.h/cpp)
-- NVS persistent storage (5 configuration slots)
-- Auto-load active slot on startup
+- NVS persistent storage (5 configuration slots, stored as JSON strings)
+- Auto-load active slot on startup (with legacy binary format migration)
+- Auth credentials persistence (`authuser` / `authhash`, SHA-256)
+- BLE device name persistence (`blename`)
 - Hand-written JSON serialization/deserialization (no external dependencies)
 - Configuration import/export
 
@@ -278,13 +299,15 @@ Serial.begin(115200)  ← Serial init
     ↓
 pinMode(LED_D4/LED_D5)  ← LED init + startup blink
     ↓
-connectWiFi()  ← Connect WiFi (max 20s wait)
+startWiFi()  ← Non-blocking WiFi connect (boot wait max 10s)
     ↓
 configTime()  ← NTP time sync
     ↓
-keyboard.begin()  ← BLE keyboard init
+configMgr.begin()  ← Config manager init (read NVS)
     ↓
-configMgr.begin()  ← Config manager init
+keyboard.setDeviceName(configMgr.getBleName())  ← Apply BLE name
+    ↓
+keyboard.begin()  ← BLE keyboard init
     ↓
 loadActiveConfig()  ← Load last saved config
     ↓
@@ -299,5 +322,6 @@ System ready! Serial output IP address
 loop() each iteration:
     ├── webCtrl.handleClient()  ← Handle HTTP (non-blocking)
     ├── autoMode.update()       ← Auto mode state machine
+    ├── keyboard.checkStuck()   ← Key-stuck timeout check (auto release)
     ├── updateStatusLED()       ← LED status (non-blocking)
-    └── checkWiFi()             ← Every 30s WiFi check
+    └── handleWiFi()            ← WiFi state machine (connect/reconnect, non-blocking)

@@ -2,7 +2,7 @@
 
 ## 概述
 
-`web_server.h/cpp` 实现了完整的 Web 控制面板，包含 HTTP API 后端和单页前端应用（HTML/CSS/JS 内嵌在 C++ 字符串中）。前端提供虚拟键盘、自动模式配置、配置管理、按键日志和统计图表等功能。
+`web_server.h/cpp` 实现了完整的 Web 控制面板，包含 HTTP API 后端和单页前端应用（HTML/CSS/JS 内嵌在 C++ 字符串中）。前端提供虚拟键盘、键盘独占模式、移动端缩放、自动模式配置、配置管理、蓝牙名称修改、按键日志、统计图表以及可选的登录验证等功能。
 
 ## 前端架构
 
@@ -172,12 +172,98 @@ function toggleLang() { lang = lang === 'zh' ? 'en' : 'zh'; applyLang(); }
     /* ... */
 }
 [data-theme="light"] {
-    --bg: #f6f8fa;           /* 浅色主题 */
+    --bg: #f6f8fa;           /* Light theme */
     --card: #ffffff;
     --text: #24292f;
     /* ... */
 }
 ```
+
+## Keyboard-Only Mode
+
+The "🎹 Keyboard" button in the top bar switches the page to a **pure virtual keyboard view**:
+
+- Hides the auto mode panel, config manager, key log, and stats, leaving only the keyboard area (the top banner is unaffected)
+- Clicking any key sends `/api/press` / `/api/release` for tap input
+- The mode is saved in `localStorage['kbMode']` and persists across refreshes
+- Without a saved value, the initial mode is decided by `DEFAULT_KB_ONLY_MODE` in `config.h` (1 = keyboard-only default, 0 = advanced mode default)
+- Click again ("🧩 Full") to restore the full panel
+
+## Mobile Auto-Scaling
+
+The keyboard area uses `.kb-inner` to wrap the main keyboard, editing/arrow keys, and numpad. `fitKeyboard()` runs on page load, window resize, orientation change, and mode toggles:
+
+```
+scale = min(1, available width / keyboard natural width)
+```
+
+- When the natural keyboard width exceeds the container, `.kb-inner` gets `transform: scale(scale)` and the container height is compressed proportionally
+- On wide desktop screens `scale = 1`, with no visual change
+- On narrow phones the entire keyboard remains fully visible and tappable
+
+## BLE Name Setting
+
+The "📡 BLE Name" button in the top bar opens a settings modal:
+
+- On open, `GET /api/ble/name` pre-fills the current name
+- Enter a new name (1-24 chars) and click Save; `POST /api/ble/name` validates length, writes to NVS, and restarts BLE
+- On success: "Saved, BLE restarted, please re-pair"
+
+## Login Auth (Optional, ENABLE_WEB_AUTH)
+
+Uncomment `//#define ENABLE_WEB_AUTH 1` in `config.h` to enable (disabled by default). When enabled:
+
+- The top bar shows a 🔒/🔓 login button and a "🔑 Change Password" button
+- Write endpoints (key press, auto mode config, BLE reboot, slot read/write, config import, rename) return `401` when not logged in
+- Frontend `fetch` is patched globally: it auto-attaches the `token` parameter and opens the login modal on `401`
+- Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, etc.) stay public so the page loads normally
+- More than `WEB_AUTH_LOCKOUT_THRESHOLD` consecutive login/change failures lock the panel for `WEB_AUTH_LOCKOUT_MS`, returning `429`
+- The session token lives only in device RAM (lost on reboot) and browser `localStorage` (persists across refreshes)
+
+The login and change-password UI is only compiled and rendered when `ENABLE_WEB_AUTH` is enabled; otherwise the page is identical to the previous version.
+
+## 键盘独占模式
+
+顶部栏「🎹 键盘模式」按钮可将页面切换为**纯虚拟键盘视图**：
+
+- 隐藏自动模式面板、配置管理、按键日志与统计，主界面只保留键盘区（顶部 banner 不受影响）
+- 点击任意按键即通过 `/api/press` / `/api/release` 实现点按输入
+- 切换状态保存在 `localStorage['kbMode']`，刷新/重开浏览器保持
+- 无记忆时由 `config.h` 的 `DEFAULT_KB_ONLY_MODE` 决定初始模式（1=默认纯键盘，0=默认高级模式）
+- 再次点击按钮（「🧩 全功能」）恢复完整面板
+
+## 移动端自适应缩放
+
+键盘区外层使用 `.kb-inner` 包裹主键盘、右侧编辑/方向键与小键盘。`fitKeyboard()` 会在页面加载、窗口缩放、横竖屏切换及模式切换后执行：
+
+```
+scale = min(1, 可用宽度 / 键盘自然宽度)
+```
+
+- 当键盘自然宽度超出容器时，对 `.kb-inner` 施加 `transform: scale(scale)` 并按比例压缩容器高度
+- 桌面等宽屏下 `scale = 1`，不产生任何视觉变化
+- 手机等窄屏设备可完整看到并点按整个键盘
+
+## 蓝牙名称设置
+
+顶部栏「📡 蓝牙名」按钮打开设置弹窗：
+
+- 打开时通过 `GET /api/ble/name` 预填当前名称
+- 输入新名称（1~24 字符）点击保存，`POST /api/ble/name` 校验长度后写入 NVS 并重启 BLE
+- 成功提示"已保存，BLE 已重启，请重新配对"
+
+## 登录验证（可选，ENABLE_WEB_AUTH）
+
+在 `config.h` 中取消 `//#define ENABLE_WEB_AUTH 1` 的注释即可启用（默认关闭）。启用后：
+
+- 顶部栏显示 🔒/🔓 登录按钮与「🔑 修改密码」按钮
+- 未登录时写操作接口（按键、自动模式配置、BLE 重启、槽位读写、配置导入、改名）返回 `401`
+- 前端 `fetch` 被统一打补丁：自动携带 `token` 参数，收到 `401` 时弹出登录框
+- `/api/status`、`/api/events`、`/api/stats` 等只读端点保持公开，页面可正常加载
+- 连续登录/改密失败超过 `WEB_AUTH_LOCKOUT_THRESHOLD` 次将锁定 `WEB_AUTH_LOCKOUT_MS`，期间返回 `429`
+- 会话 token 仅存于设备内存（重启即失效）与浏览器 `localStorage`（刷新保持）
+
+登录与修改密码界面为新增 UI，仅在 `ENABLE_WEB_AUTH` 启用时编译渲染；关闭时页面与旧版完全一致。
 
 ---
 
@@ -185,7 +271,7 @@ function toggleLang() { lang = lang === 'zh' ? 'en' : 'zh'; applyLang(); }
 
 ## Overview
 
-The `web_server.h/cpp` implements a complete Web control panel, including an HTTP API backend and a single-page frontend application (HTML/CSS/JS embedded in C++ strings). The frontend provides a virtual keyboard, auto mode configuration, config management, key logging, and statistics charts.
+The `web_server.h/cpp` implements a complete Web control panel, including an HTTP API backend and a single-page frontend application (HTML/CSS/JS embedded in C++ strings). The frontend provides a virtual keyboard, keyboard-only mode, mobile auto-scaling, auto mode configuration, config management, BLE rename, key logging, statistics charts, and optional login auth.
 
 ## Frontend Architecture
 

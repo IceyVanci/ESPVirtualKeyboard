@@ -35,12 +35,20 @@ unsigned long keyFlashStart = 0;
 bool keyFlashing = false;
 bool lastD4State = false;  // 用于检测 D4 上升沿
 
-// WiFi 重连
-unsigned long lastWifiCheck = 0;
+// WiFi 重连（非阻塞状态机）
+enum WifiState {
+  WIFI_DISCONNECTED,
+  WIFI_CONNECTING,
+  WIFI_CONNECTED,
+  WIFI_FAILED
+};
+WifiState      wifiState = WIFI_DISCONNECTED;
+unsigned long  wifiAttemptStart = 0;
+int            wifiAttemptCount = 0;
 
-void connectWiFi();
+void startWiFi();
+void handleWiFi();
 void updateStatusLED();
-void checkWiFi();
 
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
@@ -64,18 +72,27 @@ void setup() {
   }
   digitalWrite(LED_D5, LOW);
 
-  // 连接 WiFi
-  connectWiFi();
+  // 连接 WiFi（非阻塞，等待最多 10 秒以获得可用 IP）
+  startWiFi();
+  {
+    unsigned long waitStart = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - waitStart < 10000) {
+      delay(100);
+    }
+  }
 
   // NTP 时间同步
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
   Serial.println("[NTP] 时间同步中...");
 
+  // 初始化配置管理器（先于 BLE，读取蓝牙设备名称等 NVS 配置）
+  configMgr.begin();
+
+  // 设置蓝牙设备名（NVS 覆盖默认值）
+  keyboard.setDeviceName(configMgr.getBleName());
+
   // 初始化 BLE 键盘
   keyboard.begin();
-
-  // 初始化配置管理器
-  configMgr.begin();
 
   // 尝试加载上次保存的配置
   AutoModeConfig savedConfig;
@@ -100,15 +117,16 @@ void setup() {
   Serial.println("系统就绪！");
   Serial.print("控制面板: http://");
   Serial.println(webCtrl.getLocalIP());
-  Serial.println("在蓝牙设置中配对: " + String(BLE_DEVICE_NAME));
+  Serial.println("在蓝牙设置中配对: " + configMgr.getBleName());
   Serial.println("================================");
 }
 
 void loop() {
   webCtrl.handleClient();
   autoMode.update();
+  keyboard.checkStuck(WEB_KEY_STUCK_TIMEOUT_MS);
   updateStatusLED();
-  checkWiFi();
+  handleWiFi();
 }
 
 // ========== LED 状态管理（非阻塞） ==========
@@ -151,54 +169,58 @@ void updateStatusLED() {
   }
 }
 
-// ========== WiFi 连接 ==========
-void connectWiFi() {
+// ========== WiFi 连接（非阻塞状态机） ==========
+void startWiFi() {
   Serial.print("[WiFi] 正在连接 ");
   Serial.print(WIFI_SSID);
   Serial.println("...");
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-    if (attempts > 40) {
-      Serial.println();
-      Serial.println("[WiFi] 连接失败！请检查 SSID 和密码");
-      return;
-    }
-  }
-
-  Serial.println();
-  Serial.print("[WiFi] 已连接! IP: ");
-  Serial.println(WiFi.localIP());
+  wifiState = WIFI_CONNECTING;
+  wifiAttemptStart = millis();
+  wifiAttemptCount++;
 }
 
-void checkWiFi() {
+void handleWiFi() {
   unsigned long now = millis();
-  if (now - lastWifiCheck < 30000) return;  // 每 30 秒检查一次
-  lastWifiCheck = now;
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] 连接丢失，尝试重连...");
-    WiFi.disconnect();
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-      delay(500);
-      Serial.print(".");
-      attempts++;
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println();
-      Serial.print("[WiFi] 重连成功! IP: ");
-      Serial.println(WiFi.localIP());
-    } else {
-      Serial.println();
-      Serial.println("[WiFi] 重连失败，30秒后重试");
-    }
+  switch (wifiState) {
+    case WIFI_CONNECTING:
+      if (WiFi.status() == WL_CONNECTED) {
+        wifiState = WIFI_CONNECTED;
+        Serial.println();
+        Serial.print("[WiFi] 已连接! IP: ");
+        Serial.println(WiFi.localIP());
+      } else if (now - wifiAttemptStart >= 10000) {
+        if (wifiAttemptCount < 3) {
+          startWiFi();  // 重试
+        } else {
+          wifiState = WIFI_FAILED;
+          Serial.println();
+          Serial.println("[WiFi] 连接失败，稍后自动重试");
+        }
+      }
+      break;
+
+    case WIFI_CONNECTED:
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WiFi] 连接丢失，尝试重连...");
+        wifiState = WIFI_DISCONNECTED;
+        wifiAttemptCount = 0;
+        startWiFi();
+      }
+      break;
+
+    case WIFI_FAILED:
+      // 30 秒后重新尝试连接
+      if (now - wifiAttemptStart >= 30000) {
+        wifiAttemptCount = 0;
+        startWiFi();
+      }
+      break;
+
+    default:
+      break;
   }
 }

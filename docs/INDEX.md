@@ -10,7 +10,7 @@
 | 04 | [自动模式](04_AUTO_MODE_自动模式.md) | 状态机、加权随机算法、Box-Muller 正态分布、事件日志 |
 | 05 | [Web 控制面板](05_WEB_SERVER_Web控制面板.md) | 键盘布局、事件处理、轮询机制、国际化、主题切换 |
 | 06 | [配置管理](06_CONFIG_MANAGER_配置管理.md) | NVS 存储布局、槽位操作、JSON 序列化格式 |
-| 07 | [API 参考](07_API_REFERENCE_API参考.md) | 17 个 API 端点详细说明、请求/响应示例、键名映射表 |
+| 07 | [API 参考](07_API_REFERENCE_API参考.md) | 20+ 个 API 端点详细说明（含可选认证端点）、请求/响应示例、键名映射表 |
 | 08 | [配置参数](08_CONFIGURATION_配置参数.md) | config.h 所有宏定义、HID 键码表、LED 状态指示说明 |
 
 ---
@@ -25,5 +25,5 @@
 | 04 | [Auto Mode](04_AUTO_MODE_自动模式.md) | State machine, weighted random algorithm, Box-Muller distribution, event log |
 | 05 | [Web Control Panel](05_WEB_SERVER_Web控制面板.md) | Keyboard layout, event handling, polling, i18n, theme switching |
 | 06 | [Config Management](06_CONFIG_MANAGER_配置管理.md) | NVS storage layout, slot operations, JSON serialization format |
-| 07 | [API Reference](07_API_REFERENCE_API参考.md) | 17 API endpoints details, request/response examples, key mapping table |
+| 07 | [API Reference](07_API_REFERENCE_API参考.md) | 20+ API endpoints details (incl. optional auth endpoints), request/response examples, key mapping table |
 | 08 | [Configuration Parameters](08_CONFIGURATION_配置参数.md) | All config.h macros, HID keycode table, LED status indicators |

@@ -19,8 +19,16 @@ void BleKeyboard::ServerCallbacks::onDisconnect(BLEServer* pServer) {
 
 BleKeyboard::BleKeyboard(const char* deviceName)
   : _pServer(nullptr), _hid(nullptr), _inputKeyboard(nullptr),
-    _deviceName(deviceName), _state(BLE_STATE_STOPPED) {
+    _state(BLE_STATE_STOPPED), _lastKeyActivity(0) {
+  strncpy(_deviceName, deviceName, sizeof(_deviceName) - 1);
+  _deviceName[sizeof(_deviceName) - 1] = '\0';
   memset(_keyReport, 0, sizeof(_keyReport));
+}
+
+void BleKeyboard::setDeviceName(const String& name) {
+  String trimmed = name.substring(0, sizeof(_deviceName) - 1);
+  strncpy(_deviceName, trimmed.c_str(), sizeof(_deviceName) - 1);
+  _deviceName[sizeof(_deviceName) - 1] = '\0';
 }
 
 void BleKeyboard::begin() {
@@ -91,6 +99,7 @@ void BleKeyboard::clearReport() {
 }
 
 void BleKeyboard::press(uint8_t keyCode) {
+  _lastKeyActivity = millis();
   for (int i = 2; i < 8; i++) {
     if (_keyReport[i] == keyCode) {
       sendReport();
@@ -108,6 +117,7 @@ void BleKeyboard::press(uint8_t keyCode) {
 }
 
 void BleKeyboard::release(uint8_t keyCode) {
+  _lastKeyActivity = millis();
   for (int i = 2; i < 8; i++) {
     if (_keyReport[i] == keyCode) {
       _keyReport[i] = 0;
@@ -129,8 +139,21 @@ void BleKeyboard::pressAndRelease(uint8_t keyCode, unsigned long holdMs) {
 }
 
 void BleKeyboard::releaseAll() {
+  _lastKeyActivity = millis();
   clearReport();
   sendReport();
+}
+
+void BleKeyboard::checkStuck(unsigned long timeoutMs) {
+  if (_state != BLE_STATE_CONNECTED) return;
+  bool anyKey = false;
+  for (int i = 0; i < 8; i++) {
+    if (_keyReport[i]) { anyKey = true; break; }
+  }
+  if (anyKey && (millis() - _lastKeyActivity >= timeoutMs)) {
+    Serial.println("[BLE] 检测到卡键，自动释放所有按键");
+    releaseAll();
+  }
 }
 
 void BleKeyboard::pressWithModifier(uint8_t modifier, uint8_t keyCode) {
@@ -159,6 +182,7 @@ void BleKeyboard::disconnectAndReboot() {
     }
     // disconnect() 会触发 onDisconnect 回调，自动重启广播
     // 等待一小段时间确保断开完成
+    // 注：此处为阻塞等待，仅在用户手动操作"配对"时触发，可接受
     delay(200);
   } else {
     // 未连接状态下，直接重启广播

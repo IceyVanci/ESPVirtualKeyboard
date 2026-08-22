@@ -57,6 +57,10 @@ public:
   bool isConnected();
   BleState getState();
 
+  // 设置蓝牙设备名称（需在 begin() 前调用，或调用后 end()+begin() 生效）
+  void setDeviceName(const String& name);
+  const char* getDeviceName() const { return _deviceName; }
+
   // 键盘操作
   void press(uint8_t keyCode);
   void release(uint8_t keyCode);
@@ -68,13 +72,17 @@ public:
   // BLE 连接控制：断开当前连接并重新广播（允许重新配对）
   void disconnectAndReboot();
 
+  // 卡键安全超时：BLE 连接下若超过 timeoutMs 无任何按键活动且仍有按键被按住，自动释放所有按键
+  void checkStuck(unsigned long timeoutMs);
+
 private:
   BLEServer*            _pServer;
   BLEHIDDevice*         _hid;
   BLECharacteristic*    _inputKeyboard;
-  const char*           _deviceName;
+  char                  _deviceName[32];
   BleState              _state;
   uint8_t               _keyReport[8]; // [modifier, reserved, key1..key6]
+  unsigned long         _lastKeyActivity; // 最近一次按键活动时间
 
   void sendReport();
   void clearReport();

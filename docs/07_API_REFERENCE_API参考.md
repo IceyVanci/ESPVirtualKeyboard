@@ -2,7 +2,9 @@
 
 ## 概述
 
-Web 控制面板提供 17 个 REST API 端点，所有端点返回 JSON 格式响应。基础 URL 为 `http://<ESP32_IP>`。
+Web 控制面板提供 20+ 个 REST API 端点（含可选认证端点），所有端点返回 JSON 格式响应。基础 URL 为 `http://<ESP32_IP>`。
+
+> **认证**：仅在 `config.h` 中启用 `ENABLE_WEB_AUTH` 后生效。启用时，写操作端点需在请求中携带 `token` 参数（如 `/api/press?key=w&token=xxx`），否则返回 `401`；连续失败锁定返回 `429`。只读端点（`/api/status`、`/api/events`、`/api/stats`、`/api/slots`、`/api/config/export`、`/api/slot/export`）始终公开。详见文末「认证端点」。
 
 ## 端点列表
 
@@ -369,6 +371,104 @@ json={...}
 
 ---
 
+### 17. 获取/修改蓝牙名称
+
+```
+GET /api/ble/name
+POST /api/ble/name
+Content-Type: application/x-www-form-urlencoded
+
+name=MyKeyboard
+```
+
+#### GET 响应
+
+```json
+{"name": "ESP Virtual Keyboard"}
+```
+
+#### POST
+
+- **参数**: `name` (必需，1~24 字符)
+- 校验长度后写入 NVS（`blename`），重启 BLE 使新名称生效（当前连接断开，需重新配对）
+- **需登录**（启用 `ENABLE_WEB_AUTH` 时）
+
+**响应**:
+```json
+{"ok": true, "msg": "已保存，请重新配对"}
+```
+
+**错误**:
+```json
+{"error": "invalid length"}
+```
+
+---
+
+## 认证端点（仅 ENABLE_WEB_AUTH 启用时注册）
+
+### A. 登录
+
+```
+POST /api/login
+Content-Type: application/x-www-form-urlencoded
+
+user=admin&pass=12345678
+```
+
+**成功响应**（返回会话 token）:
+```json
+{"ok": true, "token": "9f2c..."}
+```
+
+**失败响应**:
+```json
+{"error": "invalid"}
+```
+
+**锁定响应**（连续失败超过 `WEB_AUTH_LOCKOUT_THRESHOLD`）:
+```json
+{"error": "locked", "retry": 25}
+```
+
+### B. 登出
+
+```
+POST /api/logout
+```
+
+需携带有效 `token`。使当前会话 token 失效。
+
+**响应**:
+```json
+{"ok": true}
+```
+
+### C. 修改凭据
+
+```
+POST /api/auth/change
+Content-Type: application/x-www-form-urlencoded
+
+oldUser=admin&oldPass=12345678&newUser=admin&newPass=newpass
+```
+
+校验旧凭据（与登录相同的哈希比对），通过后写入新凭据并使当前会话失效。不依赖已登录状态。
+
+**响应**:
+```json
+{"ok": true}
+```
+
+**错误**:
+```json
+{"error": "invalid"}
+{"error": "invalid length"}
+{"error": "locked", "retry": 25}
+```
+
+---
+
 ## 键名映射表
 
 以下按键名称可用于 `/api/press` 和 `/api/release` 的 `key` 参数：
@@ -401,7 +501,9 @@ json={...}
 
 ## Overview
 
-The Web control panel provides 17 REST API endpoints, all returning JSON responses. The base URL is `http://<ESP32_IP>`.
+The Web control panel provides 20+ REST API endpoints (including optional auth endpoints), all returning JSON responses. The base URL is `http://<ESP32_IP>`.
+
+> **Auth**: Only active when `ENABLE_WEB_AUTH` is enabled in `config.h`. When enabled, write endpoints require a `token` parameter (e.g. `/api/press?key=w&token=xxx`), otherwise `401` is returned; lockout returns `429`. Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, `/api/slots`, `/api/config/export`, `/api/slot/export`) are always public. See "Auth Endpoints" at the end.
 
 ## Endpoint List
 
@@ -750,6 +852,104 @@ json={...}
 **Response**:
 ```json
 {"ok": true}
+```
+
+---
+
+### 17. Get/Change BLE Name
+
+```
+GET /api/ble/name
+POST /api/ble/name
+Content-Type: application/x-www-form-urlencoded
+
+name=MyKeyboard
+```
+
+#### GET Response
+
+```json
+{"name": "ESP Virtual Keyboard"}
+```
+
+#### POST
+
+- **Parameters**: `name` (required, 1-24 chars)
+- After length validation, writes to NVS (`blename`) and restarts BLE so the new name takes effect (current connection drops; re-pair required)
+- **Auth required** (when `ENABLE_WEB_AUTH` enabled)
+
+**Response**:
+```json
+{"ok": true, "msg": "已保存，请重新配对"}
+```
+
+**Errors**:
+```json
+{"error": "invalid length"}
+```
+
+---
+
+## Auth Endpoints (registered only when ENABLE_WEB_AUTH is enabled)
+
+### A. Login
+
+```
+POST /api/login
+Content-Type: application/x-www-form-urlencoded
+
+user=admin&pass=12345678
+```
+
+**Success response** (returns session token):
+```json
+{"ok": true, "token": "9f2c..."}
+```
+
+**Failure response**:
+```json
+{"error": "invalid"}
+```
+
+**Locked response** (after more than `WEB_AUTH_LOCKOUT_THRESHOLD` consecutive failures):
+```json
+{"error": "locked", "retry": 25}
+```
+
+### B. Logout
+
+```
+POST /api/logout
+```
+
+Requires a valid `token`. Invalidates the current session token.
+
+**Response**:
+```json
+{"ok": true}
+```
+
+### C. Change Credentials
+
+```
+POST /api/auth/change
+Content-Type: application/x-www-form-urlencoded
+
+oldUser=admin&oldPass=12345678&newUser=admin&newPass=newpass
+```
+
+Verifies the old credentials (same hash comparison as login), then writes the new credentials and invalidates the current session. Does not require an existing login.
+
+**Response**:
+```json
+{"ok": true}
+```
+
+**Errors**:
+```json
+{"error": "invalid"}
+{"error": "invalid length"}
+{"error": "locked", "retry": 25}
 ```
 
 ---

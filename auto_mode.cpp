@@ -1,16 +1,44 @@
 #include "auto_mode.h"
 #include "ble_keyboard.h"
+#include <esp_system.h>
 
 AutoMode::AutoMode(BleKeyboard* keyboard)
   : _keyboard(keyboard), _state(AUTO_IDLE), _lastActionTime(0),
     _nextInterval(0), _currentHoldTime(0), _currentKey(0),
     _eventWritePos(0), _eventCounter(0), _totalCount(0) {
-  randomSeed(analogRead(0)); // 初始化随机数种子
+  randomSeed(esp_random()); // 使用硬件随机源初始化随机数种子
   memset(_keyCounts, 0, sizeof(_keyCounts));
 }
 
 void AutoMode::setConfig(const AutoModeConfig& config) {
   _config = config;
+
+  // 参数钳制（与 JSON 导入规则一致）
+  if (_config.minIntervalMs < 100) _config.minIntervalMs = 100;
+  if (_config.maxIntervalMs > 30000) _config.maxIntervalMs = 30000;
+  if (_config.minIntervalMs > _config.maxIntervalMs) {
+    unsigned long tmp = _config.minIntervalMs;
+    _config.minIntervalMs = _config.maxIntervalMs;
+    _config.maxIntervalMs = tmp;
+  }
+  if (_config.minHoldMs < 10) _config.minHoldMs = 10;
+  if (_config.maxHoldMs > 5000) _config.maxHoldMs = 5000;
+  if (_config.minHoldMs > _config.maxHoldMs) {
+    unsigned long tmp = _config.minHoldMs;
+    _config.minHoldMs = _config.maxHoldMs;
+    _config.maxHoldMs = tmp;
+  }
+  auto clampWeight = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+  _config.moveForwardWeight = clampWeight(_config.moveForwardWeight);
+  _config.moveBackWeight = clampWeight(_config.moveBackWeight);
+  _config.moveLeftWeight = clampWeight(_config.moveLeftWeight);
+  _config.moveRightWeight = clampWeight(_config.moveRightWeight);
+  _config.turnLeftWeight = clampWeight(_config.turnLeftWeight);
+  _config.turnRightWeight = clampWeight(_config.turnRightWeight);
+  _config.jumpWeight = clampWeight(_config.jumpWeight);
+  _config.weightC = clampWeight(_config.weightC);
+  _config.weightZ = clampWeight(_config.weightZ);
+  _config.idleWeight = clampWeight(_config.idleWeight);
 
   // 归一化兜底：如果权重总和 > 1，按比例缩小
   float sum = _config.moveForwardWeight + _config.moveBackWeight +

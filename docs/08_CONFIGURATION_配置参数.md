@@ -15,7 +15,7 @@
 **注意**：
 - ESP32-C3 仅支持 2.4GHz 频段，不支持 5GHz
 - SSID 和密码区分大小写
-- 连接失败时，系统会在 20 秒后超时，仍可访问 Web 控制面板（但无法通过外网访问）
+- 连接采用**非阻塞状态机**：单次尝试最长 10 秒、最多 3 次，失败后每 30 秒重试；期间 Web 服务器始终可用
 
 ## BLE 配置
 
@@ -25,6 +25,7 @@
 
 **说明**：蓝牙广播和配对时显示的设备名称。
 **注意**：名称过长可能导致某些蓝牙扫描器截断显示。
+**运行时修改**：此宏仅作为初始默认值；实际名称可在 Web 控制面板「📡 蓝牙名」处修改并持久化到 NVS（键 `blename`，最多 24 字符），重启 BLE 生效。
 
 ## Web 服务器配置
 
@@ -41,6 +42,49 @@
 ```
 
 **说明**：串口通信波特率。串口监视器需设置为此值。
+
+## Web 认证（可选，默认关闭）
+
+```cpp
+//#define ENABLE_WEB_AUTH 1
+#define WEB_AUTH_USERNAME "admin"
+#define WEB_AUTH_PASSWORD "12345678"
+#define WEB_AUTH_LOCKOUT_THRESHOLD 5
+#define WEB_AUTH_LOCKOUT_MS 30000
+```
+
+**说明**：
+- 取消 `ENABLE_WEB_AUTH` 的注释启用 Web 登录验证，防止局域网内任意设备注入按键
+- `WEB_AUTH_USERNAME / WEB_AUTH_PASSWORD` 仅在首次使用时写入 NVS 作为初始凭据（之后以 NVS 为准）
+- 密码在 NVS 中以 SHA-256 哈希存储，不存明文
+- 连续登录/改密失败达到 `WEB_AUTH_LOCKOUT_THRESHOLD` 次后，锁定 `WEB_AUTH_LOCKOUT_MS` 毫秒
+- 默认关闭时，认证功能与页面按钮均不编译，行为与旧版一致
+
+## 固件信息
+
+```cpp
+#define FW_VERSION "v1.0"
+#define FW_BUILD_DATE __DATE__   // 编译日期
+#define FW_BUILD_TIME __TIME__   // 编译时间
+```
+
+**说明**：显示在 Web 页面底部页脚（版本 + 构建日期/时间），由编译器自动生成。
+
+## 卡键安全超时
+
+```cpp
+#define WEB_KEY_STUCK_TIMEOUT_MS 5000
+```
+
+**说明**：Web 面板按下按键后，若超过该时间未收到释放（浏览器崩溃/断连等），自动释放所有按键。默认开启。
+
+## 界面默认模式
+
+```cpp
+#define DEFAULT_KB_ONLY_MODE 0
+```
+
+**说明**：`1` = 开机默认纯虚拟键盘模式（只显示键盘），`0` = 开机默认高级模式（完整控制面板）。运行时切换会被记忆（localStorage），此宏仅在浏览器无记忆时决定初始模式。
 
 ## LED 配置
 
@@ -104,6 +148,8 @@
 | **总和** | **0.98** | | |
 
 权重不需要总和为 1.0，后端会自动归一化。但建议总和保持在 1.0 左右以确保行为可预测。
+
+> 应用配置时（`setConfig`）会自动钳制：interval 限制在 100~30000ms、hold 限制在 10~5000ms、权重限制在 [0,1]，且当 min > max 时自动交换。
 
 ## HID 键码表
 
@@ -206,13 +252,15 @@
 **Note**:
 - ESP32-C3 only supports 2.4GHz band, not 5GHz
 - SSID and password are case-sensitive
-- On connection failure, the system will timeout after 20 seconds but still serve the Web panel (though not accessible externally)
+- Connection uses a **non-blocking state machine**: max 10s per attempt, up to 3 attempts, retry every 30s after failure; the Web server stays available throughout
 
 ## BLE Configuration
 
 ```cpp
 #define BLE_DEVICE_NAME "ESP Virtual Keyboard"
 ```
+
+**Note**: This macro is only the initial default. The actual name can be changed via the "📡 BLE Name" button in the web panel and is persisted to NVS (key `blename`, max 24 chars); it takes effect after a BLE restart.
 
 ## Web Server Configuration
 
@@ -225,6 +273,49 @@
 ```cpp
 #define SERIAL_BAUD_RATE 115200
 ```
+
+## Web Auth (Optional, Disabled by Default)
+
+```cpp
+//#define ENABLE_WEB_AUTH 1
+#define WEB_AUTH_USERNAME "admin"
+#define WEB_AUTH_PASSWORD "12345678"
+#define WEB_AUTH_LOCKOUT_THRESHOLD 5
+#define WEB_AUTH_LOCKOUT_MS 30000
+```
+
+**Note**:
+- Uncomment `ENABLE_WEB_AUTH` to enable web login verification, preventing unauthorized keystroke injection on the LAN
+- `WEB_AUTH_USERNAME / WEB_AUTH_PASSWORD` are seeded into NVS on first use as initial credentials (NVS takes precedence afterwards)
+- Passwords are stored in NVS as SHA-256 hashes, never plaintext
+- After `WEB_AUTH_LOCKOUT_THRESHOLD` consecutive login/change failures, the panel is locked for `WEB_AUTH_LOCKOUT_MS` milliseconds
+- When disabled, auth features and page buttons are not compiled; behavior is identical to the previous version
+
+## Firmware Info
+
+```cpp
+#define FW_VERSION "v1.0"
+#define FW_BUILD_DATE __DATE__   // Build date
+#define FW_BUILD_TIME __TIME__   // Build time
+```
+
+**Note**: Displayed in the footer at the bottom of the web page (version + build date/time), generated automatically by the compiler.
+
+## Key-Stuck Timeout
+
+```cpp
+#define WEB_KEY_STUCK_TIMEOUT_MS 5000
+```
+
+**Note**: After a web panel key press, if no release is received within this time (browser crash/disconnect, etc.), all keys are auto-released. Enabled by default.
+
+## Default UI Mode
+
+```cpp
+#define DEFAULT_KB_ONLY_MODE 0
+```
+
+**Note**: `1` = default to keyboard-only mode (only the keyboard shown), `0` = default to advanced mode (full panel). Runtime toggles are remembered (localStorage); this macro only decides the initial mode when there is no saved preference.
 
 ## LED Configuration
 
@@ -265,7 +356,6 @@
 | `DEFAULT_MAX_INTERVAL_MS` | 4000 | Max key interval (ms) | 500-10000 |
 | `DEFAULT_MIN_HOLD_MS` | 80 | Min key hold time (ms) | 20-1000 |
 | `DEFAULT_MAX_HOLD_MS` | 600 | Max key hold time (ms) | 50-3000 |
-
 ### Weight Parameters
 
 | Macro | Default | Key | Description |
@@ -281,6 +371,10 @@
 | `DEFAULT_WEIGHT_Z` | 0.05 | Z | Prone |
 | `DEFAULT_WEIGHT_IDLE` | 0.08 | - | Idle |
 | **Total** | **0.98** | | |
+
+The weights don't need to sum to 1.0; the backend auto-normalizes. It is recommended to keep the total around 1.0 for predictable behavior.
+
+> When applying config (`setConfig`), values are clamped automatically: interval to 100-30000ms, hold to 10-5000ms, weights to [0,1], and min/max are auto-swapped if min > max.
 
 ## HID Keycode Table
 
