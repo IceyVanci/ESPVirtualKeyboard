@@ -86,6 +86,14 @@
 
 **说明**：`1` = 开机默认纯虚拟键盘模式（只显示键盘），`0` = 开机默认高级模式（完整控制面板）。运行时切换会被记忆（localStorage），此宏仅在浏览器无记忆时决定初始模式。
 
+## 顺序模式
+
+```cpp
+#define SEQ_MAX_STEPS 64
+```
+
+**说明**：单条顺序配置的最大步数。录制/导入超过该上限的步骤会被截断。
+
 ## LED 配置
 
 | 宏定义 | 值 | 说明 |
@@ -234,6 +242,19 @@
 | `HID_MOD_RIGHT_ALT` | 0x40 | 位 6 |
 | `HID_MOD_RIGHT_GUI` | 0x80 | 位 7 |
 
+Web 修饰键哨兵键码（`webKeyToHid` 对这些键名返回哨兵值，`BleKeyboard::press/release` 按位写入/清除修饰字节；与普通键码 0x04~0x63 及未知 0xFF 均不冲突）：
+
+| 宏 | 值 | 对应 Web 键名 |
+|-----|-----|---------------|
+| `HID_SENTINEL_LCTRL` | 0xE1 | `lctrl` |
+| `HID_SENTINEL_LSHIFT` | 0xE2 | `lshift` / `shift` |
+| `HID_SENTINEL_LALT` | 0xE3 | `lalt` |
+| `HID_SENTINEL_LGUI` | 0xE4 | `lwin` / `lmeta` / `lcmd` |
+| `HID_SENTINEL_RCTRL` | 0xE5 | `rctrl` |
+| `HID_SENTINEL_RSHIFT` | 0xE6 | `rshift` |
+| `HID_SENTINEL_RALT` | 0xE7 | `ralt` |
+| `HID_SENTINEL_RGUI` | 0xE8 | `rwin` / `rmeta` |
+
 ---
 
 # Configuration Parameters
@@ -316,6 +337,14 @@
 ```
 
 **Note**: `1` = default to keyboard-only mode (only the keyboard shown), `0` = default to advanced mode (full panel). Runtime toggles are remembered (localStorage); this macro only decides the initial mode when there is no saved preference.
+
+## Sequence Mode
+
+```cpp
+#define SEQ_MAX_STEPS 64
+```
+
+**Note**: Maximum number of steps in a single sequence config. Steps beyond this limit are truncated on record/import.
 
 ## LED Configuration
 
@@ -458,3 +487,16 @@ The weights don't need to sum to 1.0; the backend auto-normalizes. It is recomme
 | `HID_MOD_RIGHT_SHIFT` | 0x20 | Bit 5 |
 | `HID_MOD_RIGHT_ALT` | 0x40 | Bit 6 |
 | `HID_MOD_RIGHT_GUI` | 0x80 | Bit 7 |
+
+Web modifier sentinel keycodes (`webKeyToHid` returns these for the key names below; `BleKeyboard::press/release` sets/clears the modifier byte accordingly; they do not collide with regular keycodes 0x04~0x63 or the unknown 0xFF):
+
+| Macro | Value | Web Key Names |
+|-------|-------|---------------|
+| `HID_SENTINEL_LCTRL` | 0xE1 | `lctrl` |
+| `HID_SENTINEL_LSHIFT` | 0xE2 | `lshift` / `shift` |
+| `HID_SENTINEL_LALT` | 0xE3 | `lalt` |
+| `HID_SENTINEL_LGUI` | 0xE4 | `lwin` / `lmeta` / `lcmd` |
+| `HID_SENTINEL_RCTRL` | 0xE5 | `rctrl` |
+| `HID_SENTINEL_RSHIFT` | 0xE6 | `rshift` |
+| `HID_SENTINEL_RALT` | 0xE7 | `ralt` |
+| `HID_SENTINEL_RGUI` | 0xE8 | `rwin` / `rmeta` |

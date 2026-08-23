@@ -56,6 +56,13 @@ ESP VirtualKeyboard 采用模块化设计，各模块职责清晰、耦合度低
 - 按键计数统计
 - 参数钳制（interval 100~30000ms、hold 10~5000ms、权重 [0,1]，min≤max 自动交换）
 
+### 顺序模式模块 (seq_mode.h/cpp)
+- 录制由 Web 前端完成（基于按键事件时间戳），设备负责存储/回放
+- 非阻塞回放状态机（press → 等 hold → release → 等 gap → 下一步）
+- 支持循环播放与两次循环之间的周期（loopGapMs）
+- 支持"暂停步骤"（空键名，仅等待 holdMs）
+- 互斥：播放顺序模式时自动停止自动模式，反之亦然
+
 ### Web 服务器模块 (web_server.h/cpp)
 - HTTP API 服务（20+ 个 REST 端点，含可选认证端点）
 - 完整前端控制面板（HTML/CSS/JS 内嵌）
@@ -67,12 +74,12 @@ ESP VirtualKeyboard 采用模块化设计，各模块职责清晰、耦合度低
 - 中英文国际化、明暗主题切换
 
 ### 配置管理器模块 (config_manager.h/cpp)
-- NVS 持久化存储（5 个配置槽位，以 JSON 字符串存储）
+- NVS 持久化存储（5 个自动模式槽位 + 5 个顺序模式槽位，以 JSON 字符串存储）
 - 活动槽位自动加载（旧字节格式自动迁移）
 - 认证凭据持久化（`authuser` / `authhash`，SHA-256）
 - 蓝牙设备名称持久化（`blename`）
 - 手写 JSON 序列化/反序列化（无外部依赖）
-- 配置导入/导出
+- 配置导入/导出（含一键导出全部栏位）
 
 ## 数据流
 
@@ -156,6 +163,7 @@ webCtrl.begin()  ← Web 服务器启动
 loop() 每轮执行:
     ├── webCtrl.handleClient()  ← 处理 HTTP 请求（非阻塞）
     ├── autoMode.update()       ← 自动模式状态机更新
+    ├── seqMode.update()        ← 顺序模式回放状态机更新
     ├── keyboard.checkStuck()   ← 卡键安全超时检查（自动释放）
     ├── updateStatusLED()       ← LED 状态指示（非阻塞）
     └── handleWiFi()            ← WiFi 状态机（连接/重连，非阻塞）
@@ -222,6 +230,13 @@ ESP VirtualKeyboard adopts a modular design with clear responsibilities and low 
 - Key count statistics
 - Parameter clamping (interval 100-30000ms, hold 10-5000ms, weights [0,1], min/max auto-swap)
 
+### Sequence Mode Module (seq_mode.h/cpp)
+- Recording is done in the web frontend (based on key event timestamps); the device stores/plays back
+- Non-blocking playback state machine (press → wait hold → release → wait gap → next)
+- Supports looping with an adjustable inter-loop gap (`loopGapMs`)
+- Supports "pause steps" (empty key name, only waits holdMs)
+- Mutual exclusion: playing sequence mode stops auto mode, and vice versa
+
 ### Web Server Module (web_server.h/cpp)
 - HTTP API service (20+ REST endpoints, including optional auth endpoints)
 - Complete frontend control panel (HTML/CSS/JS embedded)
@@ -233,12 +248,12 @@ ESP VirtualKeyboard adopts a modular design with clear responsibilities and low 
 - Chinese/English i18n, dark/light theme switching
 
 ### Config Manager Module (config_manager.h/cpp)
-- NVS persistent storage (5 configuration slots, stored as JSON strings)
+- NVS persistent storage (5 auto mode slots + 5 sequence mode slots, stored as JSON strings)
 - Auto-load active slot on startup (with legacy binary format migration)
 - Auth credentials persistence (`authuser` / `authhash`, SHA-256)
 - BLE device name persistence (`blename`)
 - Hand-written JSON serialization/deserialization (no external dependencies)
-- Configuration import/export
+- Configuration import/export (including one-click export of all slots)
 
 ## Data Flow
 
@@ -322,6 +337,7 @@ System ready! Serial output IP address
 loop() each iteration:
     ├── webCtrl.handleClient()  ← Handle HTTP (non-blocking)
     ├── autoMode.update()       ← Auto mode state machine
+    ├── seqMode.update()        ← Sequence mode playback state machine
     ├── keyboard.checkStuck()   ← Key-stuck timeout check (auto release)
     ├── updateStatusLED()       ← LED status (non-blocking)
     └── handleWiFi()            ← WiFi state machine (connect/reconnect, non-blocking)

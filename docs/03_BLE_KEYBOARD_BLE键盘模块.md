@@ -83,15 +83,20 @@ BLE_STATE_ADVERTISING ──→ 电脑扫描并配对
 ## 按键管理详解
 
 ### press(keyCode)
-1. 从 `_keyReport[2]` 到 `_keyReport[7]` 查找空位或已存在的键码
-2. 如果已存在，直接发送报告并返回（防止重复按下）
-3. 如果找到空位，填入键码并发送报告
-4. 将 LED D4 置高（按键闪烁由主循环的 `updateStatusLED()` 管理关闭）
+0. **连接守卫**：仅在 `BLE_STATE_CONNECTED` 下生效，断开期间不写入报告缓冲（避免重连后发送残留按键）
+1. **修饰键**：若 `keyCode` 为 Web 修饰键哨兵码（`0xE1~0xE8`，由 `webKeyToHid` 返回），在 `_keyReport[0]` 修饰字节中按位置 1
+2. 从 `_keyReport[2]` 到 `_keyReport[7]` 查找空位或已存在的键码
+3. 如果已存在，直接发送报告并返回（防止重复按下）
+4. 如果找到空位，填入键码并发送报告
+5. 将 LED D4 置高（按键闪烁由主循环的 `updateStatusLED()` 管理关闭）
+6. 报告已满（6 键上限）时打印日志并忽略该按键
 
 ### release(keyCode)
-1. 在 `_keyReport[2-7]` 中查找指定键码
-2. 找到后移除该键码，将后续键码前移填补空位
-3. 发送更新后的报告
+0. **连接守卫**：仅在 `BLE_STATE_CONNECTED` 下生效
+1. **修饰键**：若为哨兵码，清除 `_keyReport[0]` 对应位
+2. 在 `_keyReport[2-7]` 中查找指定键码
+3. 找到后移除该键码，将后续键码前移填补空位
+4. 发送更新后的报告
 
 ### releaseAll()
 1. 清空整个 `_keyReport` 缓冲区
@@ -119,6 +124,16 @@ pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
 1. **已连接状态**：调用 `pServer->disconnect(0)` 触发 `onDisconnect` 回调，自动重启广播
 2. **未连接状态**：直接停止广播并重新开始
+
+广播相关修复说明：
+- `startAdvertising()` 使用 `setMinPreferred(0x06)` + `setMaxPreferred(0x12)`（HID 推荐广播间隔）
+- 服务 UUID 仅在首次配置时追加一次（`_advConfigured` 标记），重复调用 `startAdvertising()` 不会重复追加 UUID，重配置前先 `clearServices()` 防止库对象复用导致重复
+- `onConnect()` 时防御性 `clearReport()` + `sendReport()`，确保连接建立瞬间报告干净，不会发送断开期间的残留按键
+- `press()/release()` 仅在已连接时写入报告缓冲，断开期间的按键请求直接丢弃
+
+## Web 修饰键支持
+
+网页虚拟键盘底部的 Ctrl/Shift/Alt 键（`lctrl`、`lshift`、`lalt`、`rctrl`、`rshift`、`ralt`）由 `webKeyToHid()` 映射为哨兵键码 `0xE1~0xE8`，`press()/release()` 将其按位写入/清除修饰字节。支持组合键（如按住 Ctrl 再点 C 即 Ctrl+C）。顺序模式步骤中也可直接使用这些键名。
 
 ## 修改蓝牙名称
 
@@ -226,15 +241,20 @@ BLE_STATE_ADVERTISING ──→ Computer scans and pairs
 ## Key Management Details
 
 ### press(keyCode)
-1. Search `_keyReport[2]` through `_keyReport[7]` for existing keycode or empty slot
-2. If already present, send report and return (prevent duplicate press)
-3. If empty slot found, fill keycode and send report
-4. Set LED D4 high (flash timing managed by `updateStatusLED()` in main loop)
+0. **Connection guard**: Only active in `BLE_STATE_CONNECTED`; while disconnected the report buffer is not written (avoids sending stale keys after reconnect)
+1. **Modifier keys**: If `keyCode` is a Web modifier sentinel (`0xE1~0xE8`, returned by `webKeyToHid`), set the corresponding bit in `_keyReport[0]`
+2. Search `_keyReport[2]` through `_keyReport[7]` for existing keycode or empty slot
+3. If already present, send report and return (prevent duplicate press)
+4. If empty slot found, fill keycode and send report
+5. Set LED D4 high (flash timing managed by `updateStatusLED()` in main loop)
+6. Log and ignore the key when the 6-key report is full
 
 ### release(keyCode)
-1. Search `_keyReport[2-7]` for the specified keycode
-2. Remove it and shift remaining keycodes forward
-3. Send updated report
+0. **Connection guard**: Only active in `BLE_STATE_CONNECTED`
+1. **Modifier keys**: If sentinel, clear the corresponding bit in `_keyReport[0]`
+2. Search `_keyReport[2-7]` for the specified keycode
+3. Remove it and shift remaining keycodes forward
+4. Send updated report
 
 ### releaseAll()
 1. Clear entire `_keyReport` buffer
@@ -262,6 +282,16 @@ pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
 1. **Connected state**: Calls `pServer->disconnect(0)` to trigger `onDisconnect` callback, which auto-restarts advertising
 2. **Disconnected state**: Stops advertising directly and restarts
+
+Advertising fixes:
+- `startAdvertising()` uses `setMinPreferred(0x06)` + `setMaxPreferred(0x12)` (recommended HID advertising interval)
+- The service UUID is appended only once (`_advConfigured` flag); repeated calls do not duplicate it, and `clearServices()` runs before re-configuration to handle library object reuse
+- `onConnect()` defensively calls `clearReport()` + `sendReport()` so the report is clean the moment a connection is established
+- `press()/release()` only write the report buffer while connected; key requests while disconnected are dropped
+
+## Web Modifier Keys
+
+The Ctrl/Shift/Alt keys on the virtual keyboard (`lctrl`, `lshift`, `lalt`, `rctrl`, `rshift`, `ralt`) map to sentinel keycodes `0xE1~0xE8` via `webKeyToHid()`, and `press()/release()` set/clear the corresponding bits in the modifier byte. Combos work (e.g. hold Ctrl and click C for Ctrl+C). Sequence mode steps can also use these key names directly.
 
 ## Changing the BLE Device Name
 

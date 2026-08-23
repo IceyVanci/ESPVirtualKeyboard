@@ -4,6 +4,9 @@
 
 void BleKeyboard::ServerCallbacks::onConnect(BLEServer* pServer) {
   _parent->_state = BLE_STATE_CONNECTED;
+  // 防御性清空报告，确保重连瞬间不会发送断开期间残留的按键
+  _parent->clearReport();
+  _parent->sendReport();
   Serial.println("[BLE] 设备已连接");
 }
 
@@ -19,7 +22,7 @@ void BleKeyboard::ServerCallbacks::onDisconnect(BLEServer* pServer) {
 
 BleKeyboard::BleKeyboard(const char* deviceName)
   : _pServer(nullptr), _hid(nullptr), _inputKeyboard(nullptr),
-    _state(BLE_STATE_STOPPED), _lastKeyActivity(0) {
+    _state(BLE_STATE_STOPPED), _lastKeyActivity(0), _advConfigured(false) {
   strncpy(_deviceName, deviceName, sizeof(_deviceName) - 1);
   _deviceName[sizeof(_deviceName) - 1] = '\0';
   memset(_keyReport, 0, sizeof(_keyReport));
@@ -33,6 +36,7 @@ void BleKeyboard::setDeviceName(const String& name) {
 
 void BleKeyboard::begin() {
   Serial.println("[BLE] 初始化蓝牙...");
+  _advConfigured = false;  // 重新初始化后需重新配置广播
 
   // 初始化 BLE 设备
   BLEDevice::init(_deviceName);
@@ -99,7 +103,14 @@ void BleKeyboard::clearReport() {
 }
 
 void BleKeyboard::press(uint8_t keyCode) {
+  if (_state != BLE_STATE_CONNECTED) return;  // 未连接时不写入缓冲，避免重连鬼键
   _lastKeyActivity = millis();
+  // 修饰键哨兵码：按位写入修饰字节
+  if (keyCode >= HID_SENTINEL_LCTRL && keyCode <= HID_SENTINEL_RGUI) {
+    _keyReport[0] |= (uint8_t)(1 << (keyCode - HID_SENTINEL_LCTRL));
+    sendReport();
+    return;
+  }
   for (int i = 2; i < 8; i++) {
     if (_keyReport[i] == keyCode) {
       sendReport();
@@ -113,11 +124,19 @@ void BleKeyboard::press(uint8_t keyCode) {
       return;
     }
   }
+  Serial.printf("[BLE] 按键报告已满（6键上限），忽略按键 0x%02X\n", keyCode);
   sendReport();
 }
 
 void BleKeyboard::release(uint8_t keyCode) {
+  if (_state != BLE_STATE_CONNECTED) return;
   _lastKeyActivity = millis();
+  // 修饰键哨兵码：清除修饰字节对应位
+  if (keyCode >= HID_SENTINEL_LCTRL && keyCode <= HID_SENTINEL_RGUI) {
+    _keyReport[0] &= (uint8_t)~(1 << (keyCode - HID_SENTINEL_LCTRL));
+    sendReport();
+    return;
+  }
   for (int i = 2; i < 8; i++) {
     if (_keyReport[i] == keyCode) {
       _keyReport[i] = 0;
@@ -157,11 +176,13 @@ void BleKeyboard::checkStuck(unsigned long timeoutMs) {
 }
 
 void BleKeyboard::pressWithModifier(uint8_t modifier, uint8_t keyCode) {
+  if (_state != BLE_STATE_CONNECTED) return;
   _keyReport[0] |= modifier;
   press(keyCode);
 }
 
 void BleKeyboard::releaseWithModifier(uint8_t modifier, uint8_t keyCode) {
+  if (_state != BLE_STATE_CONNECTED) return;
   release(keyCode);
   _keyReport[0] &= ~modifier;
 }
@@ -198,10 +219,14 @@ void BleKeyboard::startAdvertising() {
   if (_pServer) {
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->setAppearance(HID_KEYBOARD);
-    pAdvertising->addServiceUUID(_hid->hidService()->getUUID());
+    if (!_advConfigured) {
+      // 仅首次调用时追加服务 UUID；deinit 会释放广播对象，无需手动清除
+      pAdvertising->addServiceUUID(_hid->hidService()->getUUID());
+      _advConfigured = true;
+    }
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
-    pAdvertising->setMinPreferred(0x12);
+    pAdvertising->setMaxPreferred(0x12);
     pAdvertising->start();
     _state = BLE_STATE_ADVERTISING;
     Serial.println("[BLE] 开始广播");

@@ -1,4 +1,5 @@
 #include "config_manager.h"
+#include "keymap.h"
 
 #include <mbedtls/md.h>
 #include <stdio.h>
@@ -343,4 +344,163 @@ bool ConfigManager::setBleName(const String& name) {
   if (trimmed.length() == 0) return false;
   _prefs.putString("blename", trimmed);
   return true;
+}
+
+// ========== 顺序模式槽位（NVS 持久化） ==========
+
+static String seqSlotNameKey(int i) { return "sq" + String(i) + "n"; }
+static String seqSlotDataKey(int i) { return "sq" + String(i) + "d"; }
+static String seqSlotUsedKey(int i) { return "sq" + String(i) + "u"; }
+
+static long clampLong(long v, long lo, long hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
+bool ConfigManager::saveSeqSlot(int slotIndex, const String& name, const SeqConfig& config) {
+  if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
+  String trimmed = name.substring(0, SLOT_NAME_MAX_LEN);
+  _prefs.putString(seqSlotNameKey(slotIndex).c_str(), trimmed);
+  _prefs.putString(seqSlotDataKey(slotIndex).c_str(), seqConfigToJson(config, trimmed));
+  _prefs.putBool(seqSlotUsedKey(slotIndex).c_str(), true);
+  return true;
+}
+
+bool ConfigManager::loadSeqSlot(int slotIndex, SeqConfig& config, String& name) {
+  if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
+  if (!_prefs.getBool(seqSlotUsedKey(slotIndex).c_str(), false)) return false;
+  name = _prefs.getString(seqSlotNameKey(slotIndex).c_str(), "未命名");
+  String json = _prefs.getString(seqSlotDataKey(slotIndex).c_str(), "");
+  if (json.length() == 0) return false;
+  String jname;
+  if (!seqJsonToConfig(json, config, jname)) return false;
+  if (jname.length() > 0) name = jname;
+  return true;
+}
+
+bool ConfigManager::deleteSeqSlot(int slotIndex) {
+  if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
+  _prefs.remove(seqSlotNameKey(slotIndex).c_str());
+  _prefs.remove(seqSlotDataKey(slotIndex).c_str());
+  _prefs.putBool(seqSlotUsedKey(slotIndex).c_str(), false);
+  if (getActiveSeqSlot() == slotIndex) setActiveSeqSlot(-1);
+  return true;
+}
+
+bool ConfigManager::isSeqSlotUsed(int slotIndex) {
+  if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
+  return _prefs.getBool(seqSlotUsedKey(slotIndex).c_str(), false);
+}
+
+String ConfigManager::getSeqSlotName(int slotIndex) {
+  if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return "";
+  return _prefs.getString(seqSlotNameKey(slotIndex).c_str(), "未命名");
+}
+
+void ConfigManager::setActiveSeqSlot(int slotIndex) {
+  _prefs.putInt("sqactive", slotIndex);
+}
+
+int ConfigManager::getActiveSeqSlot() {
+  return _prefs.getInt("sqactive", -1);
+}
+
+bool ConfigManager::loadActiveSeqConfig(SeqConfig& config) {
+  int slot = getActiveSeqSlot();
+  if (slot < 0 || slot >= SLOT_COUNT) return false;
+  String name;
+  return loadSeqSlot(slot, config, name);
+}
+
+// ========== 顺序模式 JSON 序列化（手写，风格同自动模式） ==========
+
+String ConfigManager::seqConfigToJson(const SeqConfig& c, const String& name) {
+  String j = "{";
+  j += "\"version\":1,";
+  j += "\"name\":\"" + name + "\",";
+  j += "\"loop\":" + String(c.loop ? "true" : "false") + ",";
+  j += "\"loopGapMs\":" + String(c.loopGapMs) + ",";
+  j += "\"steps\":[";
+  for (int i = 0; i < c.stepCount; i++) {
+    if (i > 0) j += ",";
+    j += "{\"k\":\"" + c.steps[i].keyName + "\",\"h\":" + String(c.steps[i].holdMs) +
+         ",\"g\":" + String(c.steps[i].gapMs) + "}";
+  }
+  j += "]}";
+  return j;
+}
+
+bool ConfigManager::seqJsonToConfig(const String& json, SeqConfig& config, String& name) {
+  int ver = jsonGetLong(json, "version", 0);
+  if (ver != 1) return false;
+  name = jsonGetString(json, "name", "顺序配置");
+  config.loop = jsonGetBool(json, "loop", false);
+  config.loopGapMs = (uint16_t)clampLong(jsonGetLong(json, "loopGapMs", 1000), 0, 10000);
+  config.stepCount = 0;
+
+  int arrIdx = json.indexOf("\"steps\"");
+  if (arrIdx >= 0) {
+    int colon = json.indexOf(':', arrIdx);
+    int q1 = json.indexOf('[', colon);
+    int arrEnd = json.indexOf(']', q1);
+    if (q1 >= 0 && arrEnd > q1) {
+      int pos = q1;
+      while (pos < arrEnd && config.stepCount < SEQ_MAX_STEPS) {
+        int ob = json.indexOf('{', pos);
+        if (ob < 0 || ob > arrEnd) break;
+        int cb = json.indexOf('}', ob);
+        if (cb < 0 || cb > arrEnd) break;
+        String elem = json.substring(ob, cb + 1);
+        String k = jsonGetString(elem, "k", "");
+        if (!(k.length() == 0 || webKeyToHid(k) != 0xFF)) break;  // 非法键名终止
+        SeqStep& s = config.steps[config.stepCount];
+        s.keyName = k;
+        s.holdMs = (uint16_t)clampLong(jsonGetLong(elem, "h", 100), 10, 10000);
+        s.gapMs = (uint16_t)clampLong(jsonGetLong(elem, "g", 100), 10, 10000);
+        config.stepCount++;
+        pos = cb + 1;
+      }
+    }
+  }
+
+  name = name.substring(0, SLOT_NAME_MAX_LEN);
+  return config.stepCount > 0;
+}
+
+// ========== 全部导出 ==========
+
+String ConfigManager::exportAllConfigs() {
+  String j = "{\"app\":\"ESPVirtualKeyboard\",\"version\":1,\"auto\":[";
+  for (int i = 0; i < SLOT_COUNT; i++) {
+    if (i > 0) j += ",";
+    if (isSlotUsed(i)) {
+      AutoModeConfig c;
+      String n;
+      if (loadSlot(i, c, n)) {
+        j += "{\"used\":true,\"name\":\"" + n + "\",\"config\":" + configToJson(c, n) + "}";
+      } else {
+        j += "{\"used\":false,\"name\":\"\"}";
+      }
+    } else {
+      j += "{\"used\":false,\"name\":\"\"}";
+    }
+  }
+  j += "],\"seq\":[";
+  for (int i = 0; i < SLOT_COUNT; i++) {
+    if (i > 0) j += ",";
+    if (isSeqSlotUsed(i)) {
+      SeqConfig c;
+      String n;
+      if (loadSeqSlot(i, c, n)) {
+        j += "{\"used\":true,\"name\":\"" + n + "\",\"config\":" + seqConfigToJson(c, n) + "}";
+      } else {
+        j += "{\"used\":false,\"name\":\"\"}";
+      }
+    } else {
+      j += "{\"used\":false,\"name\":\"\"}";
+    }
+  }
+  j += "]}";
+  return j;
 }

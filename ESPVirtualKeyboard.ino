@@ -21,12 +21,14 @@
 #include "auto_mode.h"
 #include "web_server.h"
 #include "config_manager.h"
+#include "seq_mode.h"
 
 // 全局对象
 BleKeyboard    keyboard(BLE_DEVICE_NAME);
 AutoMode       autoMode(&keyboard);
+SequenceMode   seqMode(&keyboard);
 ConfigManager  configMgr;
-WebController  webCtrl(&keyboard, &autoMode, &configMgr);
+WebController  webCtrl(&keyboard, &autoMode, &configMgr, &seqMode);
 
 // LED 状态管理变量
 unsigned long lastLedToggle = 0;
@@ -107,6 +109,13 @@ void setup() {
     Serial.println("[Config] 使用默认配置");
   }
 
+  // 尝试加载上次保存的顺序配置
+  SeqConfig savedSeq;
+  if (configMgr.loadActiveSeqConfig(savedSeq)) {
+    seqMode.setConfig(savedSeq);
+    Serial.println("[Seq] 已加载顺序配置");
+  }
+
   // 自动模式默认关闭
   autoMode.setEnabled(false);
 
@@ -124,6 +133,7 @@ void setup() {
 void loop() {
   webCtrl.handleClient();
   autoMode.update();
+  seqMode.update();
   keyboard.checkStuck(WEB_KEY_STUCK_TIMEOUT_MS);
   updateStatusLED();
   handleWiFi();

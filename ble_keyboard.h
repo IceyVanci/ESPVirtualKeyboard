@@ -83,6 +83,7 @@ private:
   BleState              _state;
   uint8_t               _keyReport[8]; // [modifier, reserved, key1..key6]
   unsigned long         _lastKeyActivity; // 最近一次按键活动时间
+  bool                  _advConfigured;   // 广播服务 UUID 是否已配置（避免重复追加）
 
   void sendReport();
   void clearReport();

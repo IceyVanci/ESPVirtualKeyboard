@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include "auto_mode.h"
+#include "seq_mode.h"
 
 #define SLOT_COUNT 5
 #define SLOT_NAME_MAX_LEN 20
@@ -56,6 +57,21 @@ public:
   // 蓝牙设备名称（NVS 持久化，默认值来自 config.h）
   String getBleName();
   bool setBleName(const String& name);       // 1~24 字符，返回是否成功
+
+  // 顺序模式槽位（5 个独立栏位，与自动模式槽位互不影响）
+  bool saveSeqSlot(int slotIndex, const String& name, const SeqConfig& config);
+  bool loadSeqSlot(int slotIndex, SeqConfig& config, String& name);
+  bool deleteSeqSlot(int slotIndex);
+  bool isSeqSlotUsed(int slotIndex);
+  String getSeqSlotName(int slotIndex);
+  void setActiveSeqSlot(int slotIndex);      // -1 = 默认
+  int  getActiveSeqSlot();
+  bool loadActiveSeqConfig(SeqConfig& config);
+  String seqConfigToJson(const SeqConfig& config, const String& name);
+  bool seqJsonToConfig(const String& json, SeqConfig& config, String& name);
+
+  // 全部导出：5 自动 + 5 顺序槽位汇总为单个 JSON
+  String exportAllConfigs();
 
 private:
   Preferences _prefs;

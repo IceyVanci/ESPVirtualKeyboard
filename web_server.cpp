@@ -2,10 +2,26 @@
 #include "ble_keyboard.h"
 #include "auto_mode.h"
 #include "config_manager.h"
+#include "seq_mode.h"
+#include "keymap.h"
 #include <esp_system.h>
 
-WebController::WebController(BleKeyboard* keyboard, AutoMode* autoMode, ConfigManager* configMgr)
-  : _server(nullptr), _keyboard(keyboard), _autoMode(autoMode), _configMgr(configMgr) {
+// 内嵌 Web 资源（PROGMEM，定义见文件后部；此处仅声明以便 handleRoot 使用）
+extern const char WEB_CSS[] PROGMEM;
+extern const char WEB_HTML_A[] PROGMEM;
+extern const char WEB_HTML_B[] PROGMEM;
+extern const char WEB_HTML_C[] PROGMEM;
+extern const char WEB_JS_MAIN[] PROGMEM;
+extern const char WEB_JS_TAIL_A[] PROGMEM;
+extern const char WEB_JS_TAIL_B[] PROGMEM;
+#ifdef ENABLE_WEB_AUTH
+extern const char WEB_HTML_AUTH_MODALS[] PROGMEM;
+extern const char WEB_AUTH_BTNS[] PROGMEM;
+extern const char WEB_JS_AUTH[] PROGMEM;
+#endif
+
+WebController::WebController(BleKeyboard* keyboard, AutoMode* autoMode, ConfigManager* configMgr, SequenceMode* seqMode)
+  : _server(nullptr), _keyboard(keyboard), _autoMode(autoMode), _configMgr(configMgr), _seqMode(seqMode) {
 }
 
 void WebController::begin() {
@@ -34,6 +50,17 @@ void WebController::begin() {
   _server->on("/api/slot/import", HTTP_POST, [this]() { handleSlotImport(); });
   _server->on("/api/config/export", HTTP_GET, [this]() { handleConfigExport(); });
   _server->on("/api/config/import", HTTP_POST, [this]() { handleConfigImport(); });
+  // 顺序模式
+  _server->on("/api/seq/config", HTTP_ANY, [this]() { handleSeqConfig(); });
+  _server->on("/api/seq/play", HTTP_POST, [this]() { handleSeqPlay(); });
+  _server->on("/api/seq/slots", HTTP_GET, [this]() { handleSeqSlots(); });
+  _server->on("/api/seq/slot/save", HTTP_POST, [this]() { handleSeqSlotSave(); });
+  _server->on("/api/seq/slot/load", HTTP_POST, [this]() { handleSeqSlotLoad(); });
+  _server->on("/api/seq/slot/delete", HTTP_POST, [this]() { handleSeqSlotDelete(); });
+  _server->on("/api/seq/slot/import", HTTP_POST, [this]() { handleSeqSlotImport(); });
+  _server->on("/api/seq/slot/export", HTTP_POST, [this]() { handleSeqSlotExport(); });
+  // 全部导出
+  _server->on("/api/config/export-all", HTTP_GET, [this]() { handleExportAll(); });
   _server->begin();
   Serial.print("[Web] 服务器已启动: http://");
   Serial.println(getLocalIP());
@@ -47,10 +74,30 @@ void WebController::handleRoot() {
   _server->send(200, "text/html", "");
   _server->sendContent("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
   _server->sendContent("<meta name='viewport' content='width=device-width,initial-scale=1'>");
-_server->sendContent("<title>ESP Virtual Keyboard</title>");
-  _server->sendContent("<style>" + generateCSS() + "</style>");
-  _server->sendContent("</head><body>" + generateHTML());
-  _server->sendContent("<script>" + generateJS() + "</script>");
+  _server->sendContent("<title>ESP Virtual Keyboard</title>");
+  _server->sendContent("<style>");
+  _server->sendContent_P(WEB_CSS);
+  _server->sendContent("</style>");
+  _server->sendContent("</head><body>");
+  _server->sendContent_P(WEB_HTML_A);
+#ifdef ENABLE_WEB_AUTH
+  _server->sendContent_P(WEB_AUTH_BTNS);
+#endif
+  _server->sendContent_P(WEB_HTML_B);
+  _server->sendContent_P(WEB_HTML_C);
+#ifdef ENABLE_WEB_AUTH
+  _server->sendContent_P(WEB_HTML_AUTH_MODALS);
+#endif
+  _server->sendContent("<div class=\"footer\">ESP Virtual Keyboard " FW_VERSION " · Build " FW_BUILD_DATE " " FW_BUILD_TIME "</div>");
+  _server->sendContent("<script>");
+  _server->sendContent_P(WEB_JS_MAIN);
+#ifdef ENABLE_WEB_AUTH
+  _server->sendContent_P(WEB_JS_AUTH);
+#endif
+  _server->sendContent_P(WEB_JS_TAIL_A);
+  _server->sendContent(String(DEFAULT_KB_ONLY_MODE));
+  _server->sendContent_P(WEB_JS_TAIL_B);
+  _server->sendContent("</script>");
   _server->sendContent("</body></html>");
 }
 
@@ -95,6 +142,8 @@ void WebController::handleConfig() {
     if (!authGuard()) return;
     AutoModeConfig c = _autoMode->getConfig();
     if (_server->hasArg("enabled")) c.enabled = _server->arg("enabled")=="true";
+    // 互斥：开启自动模式时停止顺序模式播放
+    if (c.enabled && _seqMode) _seqMode->setPlaying(false);
     if (_server->hasArg("minInterval")) c.minIntervalMs = _server->arg("minInterval").toInt();
     if (_server->hasArg("maxInterval")) c.maxIntervalMs = _server->arg("maxInterval").toInt();
     if (_server->hasArg("minHold")) c.minHoldMs = _server->arg("minHold").toInt();
@@ -123,6 +172,7 @@ void WebController::handleStatus() {
   _server->send(200, "application/json",
     "{\"bleState\":\""+ss+"\",\"bleConnected\":"+String(_keyboard->isConnected()?"true":"false")+
     ",\"autoMode\":"+String(_autoMode->isEnabled()?"true":"false")+
+    ",\"seqPlaying\":"+String(_seqMode && _seqMode->isPlaying()?"true":"false")+
     ",\"currentKey\":\""+ck+"\""+
     ",\"ip\":\""+getLocalIP()+"\",\"uptime\":"+String(millis()/1000)+
     ",\"epoch\":" + String((uint32_t)now_t) + "}");
@@ -293,48 +343,7 @@ void WebController::handleEvents() {
 }
 
 uint8_t WebController::mapWebKeyToHid(const String& key) {
-  if (key=="a")return HID_KEY_A; if (key=="b")return HID_KEY_B; if (key=="c")return HID_KEY_C;
-  if (key=="d")return HID_KEY_D; if (key=="e")return HID_KEY_E; if (key=="f")return HID_KEY_F;
-  if (key=="g")return HID_KEY_G; if (key=="h")return HID_KEY_H; if (key=="i")return HID_KEY_I;
-  if (key=="j")return HID_KEY_J; if (key=="k")return HID_KEY_K; if (key=="l")return HID_KEY_L;
-  if (key=="m")return HID_KEY_M; if (key=="n")return HID_KEY_N; if (key=="o")return HID_KEY_O;
-  if (key=="p")return HID_KEY_P; if (key=="q")return HID_KEY_Q; if (key=="r")return HID_KEY_R;
-  if (key=="s")return HID_KEY_S; if (key=="t")return HID_KEY_T; if (key=="u")return HID_KEY_U;
-  if (key=="v")return HID_KEY_V; if (key=="w")return HID_KEY_W; if (key=="x")return HID_KEY_X;
-  if (key=="y")return HID_KEY_Y; if (key=="z")return HID_KEY_Z;
-  if (key=="1")return HID_KEY_1; if (key=="2")return HID_KEY_2; if (key=="3")return HID_KEY_3;
-  if (key=="4")return HID_KEY_4; if (key=="5")return HID_KEY_5; if (key=="6")return HID_KEY_6;
-  if (key=="7")return HID_KEY_7; if (key=="8")return HID_KEY_8; if (key=="9")return HID_KEY_9;
-  if (key=="0")return HID_KEY_0;
-  if (key=="enter")return HID_KEY_ENTER; if (key=="esc")return HID_KEY_ESC;
-  if (key=="backspace")return HID_KEY_BACKSPACE; if (key=="tab")return HID_KEY_TAB;
-  if (key=="space")return HID_KEY_SPACE; if (key=="minus")return HID_KEY_MINUS;
-  if (key=="equal")return HID_KEY_EQUAL; if (key=="lbracket")return HID_KEY_LBRACKET;
-  if (key=="rbracket")return HID_KEY_RBRACKET; if (key=="backslash")return HID_KEY_BACKSLASH;
-  if (key=="semicolon")return HID_KEY_SEMICOLON; if (key=="apostrophe")return HID_KEY_APOSTROPHE;
-  if (key=="grave")return HID_KEY_GRAVE; if (key=="comma")return HID_KEY_COMMA;
-  if (key=="period")return HID_KEY_PERIOD; if (key=="slash")return HID_KEY_SLASH;
-  if (key=="capslock")return HID_KEY_CAPSLOCK;
-  if (key=="f1")return HID_KEY_F1; if (key=="f2")return HID_KEY_F2; if (key=="f3")return HID_KEY_F3;
-  if (key=="f4")return HID_KEY_F4; if (key=="f5")return HID_KEY_F5; if (key=="f6")return HID_KEY_F6;
-  if (key=="f7")return HID_KEY_F7; if (key=="f8")return HID_KEY_F8; if (key=="f9")return HID_KEY_F9;
-  if (key=="f10")return HID_KEY_F10; if (key=="f11")return HID_KEY_F11; if (key=="f12")return HID_KEY_F12;
-  if (key=="up")return HID_KEY_UP_ARROW; if (key=="down")return HID_KEY_DOWN_ARROW;
-  if (key=="left")return HID_KEY_LEFT_ARROW; if (key=="right")return HID_KEY_RIGHT_ARROW;
-  if (key=="insert")return HID_KEY_INSERT; if (key=="home")return HID_KEY_HOME;
-  if (key=="pageup")return HID_KEY_PAGEUP; if (key=="delete")return HID_KEY_DELETE;
-  if (key=="end")return HID_KEY_END; if (key=="pagedown")return HID_KEY_PAGEDOWN;
-  // 小键盘
-  if (key=="numpad0")return HID_KEY_NUMPAD_0; if (key=="numpad1")return HID_KEY_NUMPAD_1;
-  if (key=="numpad2")return HID_KEY_NUMPAD_2; if (key=="numpad3")return HID_KEY_NUMPAD_3;
-  if (key=="numpad4")return HID_KEY_NUMPAD_4; if (key=="numpad5")return HID_KEY_NUMPAD_5;
-  if (key=="numpad6")return HID_KEY_NUMPAD_6; if (key=="numpad7")return HID_KEY_NUMPAD_7;
-  if (key=="numpad8")return HID_KEY_NUMPAD_8; if (key=="numpad9")return HID_KEY_NUMPAD_9;
-  if (key=="numpadadd")return HID_KEY_NUMPAD_ADD; if (key=="numpadsub")return HID_KEY_NUMPAD_SUB;
-  if (key=="numpadmul")return HID_KEY_NUMPAD_MUL; if (key=="numpaddiv")return HID_KEY_NUMPAD_DIV;
-  if (key=="numpaddot")return HID_KEY_NUMPAD_DOT; if (key=="numpadenter")return HID_KEY_NUMPAD_ENTER;
-  if (key=="numlock")return HID_KEY_NUMLOCK;
-  return 0xFF;
+  return webKeyToHid(key);
 }
 
 // ========== 配置槽位管理 API ==========
@@ -345,11 +354,46 @@ void WebController::handleSlots() {
   for (int i = 0; i < SLOT_COUNT; i++) {
     if (i > 0) j += ",";
     SlotSummary s = _configMgr->getSlotSummary(i);
+    String cfg = "";
+    if (s.used) {
+      AutoModeConfig c;
+      String n;
+      if (_configMgr->loadSlot(i, c, n)) {
+        cfg = _configMgr->exportConfig(c, s.name);
+      }
+    }
     j += "{\"index\":" + String(i);
     j += ",\"used\":" + String(s.used ? "true" : "false");
-    j += ",\"name\":\"" + s.name + "\"}";
+    j += ",\"name\":\"" + s.name + "\"";
+    j += ",\"config\":" + (cfg.length() > 0 ? cfg : "null");
+    j += "}";
   }
   j += "],\"active\":" + String(_configMgr->getActiveSlot()) + "}";
+  _server->send(200, "application/json", j);
+}
+
+void WebController::handleSeqSlots() {
+  if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
+  String j = "{\"slots\":[";
+  for (int i = 0; i < SLOT_COUNT; i++) {
+    if (i > 0) j += ",";
+    bool used = _configMgr->isSeqSlotUsed(i);
+    String nm = used ? _configMgr->getSeqSlotName(i) : "";
+    String cfg = "";
+    if (used) {
+      SeqConfig c;
+      String n;
+      if (_configMgr->loadSeqSlot(i, c, n)) {
+        cfg = _configMgr->seqConfigToJson(c, nm);
+      }
+    }
+    j += "{\"index\":" + String(i);
+    j += ",\"used\":" + String(used ? "true" : "false");
+    j += ",\"name\":\"" + nm + "\"";
+    j += ",\"config\":" + (cfg.length() > 0 ? cfg : "null");
+    j += "}";
+  }
+  j += "],\"active\":" + String(_configMgr->getActiveSeqSlot()) + "}";
   _server->send(200, "application/json", j);
 }
 
@@ -478,10 +522,159 @@ void WebController::handleConfigImport() {
   _server->send(200, "application/json", "{\"ok\":true}");
 }
 
+// ========== 顺序模式 API ==========
+
+void WebController::handleSeqConfig() {
+  if (!_seqMode) { _server->send(500, "application/json", "{\"error\":\"seq mode not available\"}"); return; }
+  if (_server->method() == HTTP_GET) {
+    SeqConfig c = _seqMode->getConfig();
+    String name = "";
+    if (_configMgr) {
+      int active = _configMgr->getActiveSeqSlot();
+      if (active >= 0) name = _configMgr->getSeqSlotName(active);
+    }
+    _server->send(200, "application/json", _configMgr ? _configMgr->seqConfigToJson(c, name) : "{}");
+    return;
+  }
+  if (!authGuard()) return;
+  if (!_server->hasArg("json")) {
+    _server->send(400, "application/json", "{\"error\":\"missing json\"}");
+    return;
+  }
+  SeqConfig c;
+  String name;
+  if (!_configMgr || !_configMgr->seqJsonToConfig(_server->arg("json"), c, name)) {
+    _server->send(400, "application/json", "{\"error\":\"invalid seq JSON\"}");
+    return;
+  }
+  _seqMode->setConfig(c);
+  _server->send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebController::handleSeqPlay() {
+  if (!authGuard()) return;
+  if (!_seqMode) { _server->send(500, "application/json", "{\"error\":\"seq mode not available\"}"); return; }
+  if (!_server->hasArg("state")) {
+    _server->send(400, "application/json", "{\"error\":\"missing state\"}");
+    return;
+  }
+  bool on = _server->arg("state") == "on";
+  if (on) {
+    // 互斥：开启顺序播放时停止自动模式
+    _autoMode->setEnabled(false);
+    _seqMode->setPlaying(true);
+  } else {
+    _seqMode->setPlaying(false);
+  }
+  _server->send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebController::handleSeqSlotSave() {
+  if (!authGuard()) return;
+  if (!_configMgr || !_seqMode) { _server->send(500, "application/json", "{\"error\":\"not available\"}"); return; }
+  if (!_server->hasArg("slot") || !_server->hasArg("name")) {
+    _server->send(400, "application/json", "{\"error\":\"missing slot or name\"}");
+    return;
+  }
+  int slot = _server->arg("slot").toInt();
+  if (slot < 0 || slot >= SLOT_COUNT) {
+    _server->send(400, "application/json", "{\"error\":\"invalid slot\"}");
+    return;
+  }
+  SeqConfig c = _seqMode->getConfig();
+  if (c.stepCount == 0) {
+    _server->send(400, "application/json", "{\"error\":\"empty sequence\"}");
+    return;
+  }
+  if (!_configMgr->saveSeqSlot(slot, _server->arg("name"), c)) {
+    _server->send(500, "application/json", "{\"error\":\"save failed\"}");
+    return;
+  }
+  _configMgr->setActiveSeqSlot(slot);
+  _server->send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebController::handleSeqSlotLoad() {
+  if (!authGuard()) return;
+  if (!_configMgr || !_seqMode) { _server->send(500, "application/json", "{\"error\":\"not available\"}"); return; }
+  if (!_server->hasArg("slot")) {
+    _server->send(400, "application/json", "{\"error\":\"missing slot\"}");
+    return;
+  }
+  int slot = _server->arg("slot").toInt();
+  SeqConfig c;
+  String name;
+  if (!_configMgr->loadSeqSlot(slot, c, name)) {
+    _server->send(404, "application/json", "{\"error\":\"slot empty or invalid\"}");
+    return;
+  }
+  _seqMode->setConfig(c);
+  _configMgr->setActiveSeqSlot(slot);
+  _server->send(200, "application/json", "{\"ok\":true,\"name\":\"" + name + "\"}");
+}
+
+void WebController::handleSeqSlotDelete() {
+  if (!authGuard()) return;
+  if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"not available\"}"); return; }
+  if (!_server->hasArg("slot")) {
+    _server->send(400, "application/json", "{\"error\":\"missing slot\"}");
+    return;
+  }
+  int slot = _server->arg("slot").toInt();
+  _server->send(200, "application/json", _configMgr->deleteSeqSlot(slot) ? "{\"ok\":true}" : "{\"error\":\"delete failed\"}");
+}
+
+void WebController::handleSeqSlotImport() {
+  if (!authGuard()) return;
+  if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"not available\"}"); return; }
+  if (!_server->hasArg("slot") || !_server->hasArg("json")) {
+    _server->send(400, "application/json", "{\"error\":\"missing slot or json\"}");
+    return;
+  }
+  int slot = _server->arg("slot").toInt();
+  if (slot < 0 || slot >= SLOT_COUNT) {
+    _server->send(400, "application/json", "{\"error\":\"invalid slot\"}");
+    return;
+  }
+  SeqConfig c;
+  String name;
+  if (!_configMgr->seqJsonToConfig(_server->arg("json"), c, name)) {
+    _server->send(400, "application/json", "{\"error\":\"invalid seq JSON\"}");
+    return;
+  }
+  _configMgr->saveSeqSlot(slot, name, c);
+  _server->send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebController::handleSeqSlotExport() {
+  if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
+  if (!_server->hasArg("slot")) {
+    _server->send(400, "application/json", "{\"error\":\"missing slot\"}");
+    return;
+  }
+  int slot = _server->arg("slot").toInt();
+  SeqConfig c;
+  String n;
+  if (!_configMgr->loadSeqSlot(slot, c, n)) {
+    _server->send(404, "application/json", "{\"error\":\"slot empty\"}");
+    return;
+  }
+  String json = _configMgr->seqConfigToJson(c, n);
+  String safeName = n.length() > 0 ? n : "seq" + String(slot);
+  _server->sendHeader("Content-Disposition", "attachment; filename=\"" + safeName + ".json\"");
+  _server->send(200, "application/json", json);
+}
+
+void WebController::handleExportAll() {
+  if (!_configMgr) { _server->send(500, "application/json", "{\"error\":\"config manager not available\"}"); return; }
+  String json = _configMgr->exportAllConfigs();
+  _server->sendHeader("Content-Disposition", "attachment; filename=\"espvk-configs-all.json\"");
+  _server->send(200, "application/json", json);
+}
+
 // ========== HTML ==========
 
-String WebController::generateHTML() {
-  String html = R"rawliteral(
+const char WEB_HTML_A[] PROGMEM = R"rawliteral(
 <div class="top-bar">
   <div class="brand">ESP Virtual Keyboard</div>
     <div class="stats">
@@ -490,8 +683,13 @@ String WebController::generateHTML() {
     <span id="upSt" class="tag">00:00:00</span>
     <span id="clockSt" class="tag">--:--:--</span>
     <button class="top-btn" onclick="toggleKbMode()" id="btnMode">🎹 键盘模式</button>
+    <button class="top-btn" onclick="togglePanelMode()" id="btnPanelMode">🔁 顺序</button>
     <button class="top-btn" onclick="openBleNameModal()" id="btnBleName">📡 蓝牙名</button>
-    __AUTH_BTNS__
+    <button class="top-btn" onclick="exportAll()" id="btnExportAll">📤 全部导出</button>
+    <label class="top-btn import-label" id="lblImportAll"><span id="lblImportAllText">📥 全部导入</span><input type="file" accept=".json" onchange="importAll(this)" style="display:none"></label>
+)rawliteral";
+
+const char WEB_HTML_B[] PROGMEM = R"rawliteral(
     <button class="top-btn top-btn-warn" onclick="bleReboot()" id="btnPair">配对</button>
     <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">明暗</button>
     <button class="top-btn" onclick="toggleLang()" id="btnLang">En</button>
@@ -502,7 +700,7 @@ String WebController::generateHTML() {
 <div class="main">
   <!-- 控制面板 -->
   <div class="ctrl-grid">
-    <div class="ctrl-card">
+    <div class="ctrl-card" id="autoCard">
       <div class="ctrl-title" onclick="togglePanel('autoPanel')"><span id="lblAutoMode">⚙️ 自动模式</span> <span class="arrow">▾</span></div>
       <div id="autoPanel" class="ctrl-body">
         <button id="autoBtn" class="btn btn-green" onclick="toggleAuto()">▶ 开启</button>
@@ -529,7 +727,33 @@ String WebController::generateHTML() {
         <div class="wt-total"><span id="lblTotal">总计</span>: <span id="wtSum">0.88</span></div>
         <div class="btn-row">
           <button class="btn btn-blue btn-half" onclick="applyCfg()" id="btnApply">✅ 应用</button>
-          <button class="btn btn-green btn-half" onclick="saveToSlot()" id="btnSaveTo">💾 保存到配置</button>
+          <button class="btn btn-green btn-half" onclick="saveToSlot('auto')" id="btnSaveTo">💾 保存到配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 顺序模式卡片 -->
+    <div class="ctrl-card" id="seqCard" style="display:none">
+      <div class="ctrl-title" onclick="togglePanel('seqPanel')"><span id="lblSeqMode">🔁 顺序模式</span> <span class="arrow">▾</span></div>
+      <div id="seqPanel" class="ctrl-body">
+        <div class="seq-status" id="seqStatus">空闲</div>
+        <div class="btn-row">
+          <button class="btn btn-green btn-half" onclick="seqRecToggle()" id="seqRecBtn">▶ 开始录制</button>
+          <button class="btn btn-blue btn-half" onclick="seqPlay()" id="seqPlayBtn">▶ 播放</button>
+        </div>
+        <div class="seq-opts">
+          <label class="seq-chk"><input type="checkbox" id="seqLoop" onchange="seqUiChanged()"><span id="lblSeqLoop">🔁 循环</span></label>
+          <label class="seq-chk"><input type="checkbox" id="seqRecSend" checked><span id="lblSeqRecSend">录制时发送</span></label>
+          <label class="seq-chk"><span id="lblSeqLoopGap">循环周期</span><input type="number" id="seqLoopGap" min="0" max="10000" value="1000" style="width:64px" onchange="seqUiChanged()">ms</label>
+        </div>
+        <div class="seq-toolbar">
+          <span class="seq-tb-label"><span id="lblSeqSteps">步骤</span> <span id="seqStepCount">0</span></span>
+          <button class="btn btn-warn btn-sm" onclick="seqInsert()" id="btnSeqInsert">➕ 插入</button>
+        </div>
+        <div id="seqStepsBox" class="seq-steps"><div class="slot-empty" id="lblSeqEmpty">暂无步骤，点击开始录制</div></div>
+        <div class="btn-row">
+          <button class="btn btn-blue btn-half" onclick="seqApply()" id="btnSeqApply">✅ 应用</button>
+          <button class="btn btn-green btn-half" onclick="saveToSlot('seq')" id="btnSeqSaveTo">💾 保存到栏位</button>
         </div>
       </div>
     </div>
@@ -759,8 +983,7 @@ String WebController::generateHTML() {
 </div>
 )rawliteral";
 
-  // 蓝牙名称设置弹窗
-  html += R"rawliteral(
+const char WEB_HTML_C[] PROGMEM = R"rawliteral(
 <div id="bleNameModal" class="modal-overlay" style="display:none">
   <div class="modal-card">
     <div class="modal-title" id="bleNameTitle">📡 蓝牙名</div>
@@ -772,11 +995,23 @@ String WebController::generateHTML() {
     </div>
   </div>
 </div>
-  )rawliteral";
+
+<!-- 导入全部配置：逐项选择目标 -->
+<div id="importModal" class="modal-overlay" style="display:none">
+  <div class="modal-card" style="width:400px">
+    <div class="modal-title" id="impTitle">导入配置</div>
+    <div class="modal-subtitle" id="impSub">逐项选择导入目标</div>
+    <div id="impBody"></div>
+    <div class="btn-row">
+      <button class="btn btn-blue btn-half" onclick="impNext(true)" id="impImportBtn">导入</button>
+      <button class="btn btn-warn btn-half" onclick="impNext(false)" id="impSkipBtn">跳过</button>
+    </div>
+  </div>
+</div>
+)rawliteral";
 
 #ifdef ENABLE_WEB_AUTH
-  // 登录 / 修改密码弹窗（仅 ENABLE_WEB_AUTH 时渲染）
-  html += R"rawliteral(
+const char WEB_HTML_AUTH_MODALS[] PROGMEM = R"rawliteral(
 <div id="loginModal" class="modal-overlay" style="display:none">
   <div class="modal-card">
     <div class="modal-title">登录</div>
@@ -804,26 +1039,18 @@ String WebController::generateHTML() {
     </div>
   </div>
 </div>
-  )rawliteral";
+)rawliteral";
 #endif
 
-  // 顶部栏认证按钮（未启用 ENABLE_WEB_AUTH 时不渲染）
-  String authBtns = "";
 #ifdef ENABLE_WEB_AUTH
-  authBtns = "<button class=\"top-btn\" onclick=\"toggleLogin()\" id=\"btnLogin\" title=\"登录\">🔒</button><button class=\"top-btn\" onclick=\"openPwdModal()\" id=\"btnChgPwd\" title=\"修改密码\">🔑 修改密码</button>";
+const char WEB_AUTH_BTNS[] PROGMEM =
+  "<button class=\"top-btn\" onclick=\"toggleLogin()\" id=\"btnLogin\" title=\"登录\">🔒</button>"
+  "<button class=\"top-btn\" onclick=\"openPwdModal()\" id=\"btnChgPwd\" title=\"修改密码\">🔑 修改密码</button>";
 #endif
-  html.replace("__AUTH_BTNS__", authBtns);
-
-  // 页面底部：版本与固件生成日期
-  html += "<div class=\"footer\">ESP Virtual Keyboard " FW_VERSION " · Build " FW_BUILD_DATE " " FW_BUILD_TIME "</div>";
-
-  return html;
-}
 
 // ========== CSS ==========
 
-String WebController::generateCSS() {
-  return R"rawliteral(
+const char WEB_CSS[] PROGMEM = R"rawliteral(
 :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;--dim:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--orange:#d29922;--key-bg:#21262d;--key-border:#30363d;--key-h:#30363d;--key-active:#1f6feb}
 [data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--border:#d0d7de;--text:#24292f;--dim:#57606a;--accent:#0969da;--green:#1a7f37;--red:#cf222e;--orange:#bf8700;--key-bg:#f6f8fa;--key-border:#d0d7de;--key-h:#eaeef2;--key-active:#0969da}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -964,6 +1191,21 @@ body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
 .about-label{color:var(--dim);min-width:48px;font-weight:600}
 .modal-input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--key-bg);color:var(--text);margin-bottom:8px;font-size:0.85em}
 .modal-input:focus{outline:none;border-color:var(--accent)}
+.seq-status{padding:6px 10px;font-size:0.85em;color:var(--accent);font-weight:600;background:rgba(88,166,255,0.08);border-radius:8px;margin:8px 0;text-align:center}
+.seq-opts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0;font-size:0.78em;color:var(--dim)}
+.seq-chk{display:inline-flex;align-items:center;gap:4px}
+.seq-chk input[type=number]{accent-color:var(--accent);background:var(--key-bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:2px 4px}
+.seq-toolbar{display:flex;justify-content:space-between;align-items:center;margin:6px 0}
+.seq-tb-label{font-size:0.8em;color:var(--dim)}
+.seq-steps{max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px;margin-bottom:6px}
+.seq-row{display:flex;align-items:center;gap:4px;padding:3px 2px;border-bottom:1px solid rgba(48,54,61,0.4)}
+.seq-row:last-child{border-bottom:none}
+.seq-row input{background:var(--key-bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:3px 5px;font-size:0.78em}
+.seq-key{width:64px}
+.seq-t{width:64px}
+.seq-mini{background:var(--key-bg);border:1px solid var(--border);color:var(--text);border-radius:6px;width:24px;height:22px;font-size:0.7em;cursor:pointer;flex-shrink:0}
+.seq-mini:hover{background:var(--key-h)}
+.seq-mini.seq-del{color:var(--red)}
 .footer{max-width:1200px;margin:12px auto 0;padding:10px 12px;font-size:0.72em;color:var(--dim);text-align:center;border-top:1px solid var(--border)}
 @media(max-width:768px){
   .ctrl-grid,.log-stats-grid{grid-template-columns:1fr}
@@ -978,21 +1220,29 @@ body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
   .log-box{height:180px}
 }
 )rawliteral";
-}
 
 // ========== JavaScript ==========
 
-String WebController::generateJS() {
-  String js = R"rawliteral(
+const char WEB_JS_MAIN[] PROGMEM = R"rawliteral(
 var autoOn=false;
+var seqPlaying=false;
+
+function kbDown(key){
+  if(seqRec)seqRecPress(key);
+  if(!seqRec||seqRecSend)fetch('/api/press?key='+key);
+}
+function kbUp(key){
+  if(seqRec)seqRecRelease(key);
+  if(!seqRec||seqRecSend)fetch('/api/release?key='+key);
+}
 
 document.querySelectorAll('.k[data-k]').forEach(function(k){
   var key=k.dataset.k;
-  k.addEventListener('mousedown',function(e){e.preventDefault();k.classList.add('on');fetch('/api/press?key='+key)});
-  k.addEventListener('mouseup',function(e){e.preventDefault();k.classList.remove('on');fetch('/api/release?key='+key)});
-  k.addEventListener('mouseleave',function(e){k.classList.remove('on');fetch('/api/release?key='+key)});
-  k.addEventListener('touchstart',function(e){e.preventDefault();k.classList.add('on');fetch('/api/press?key='+key)},{passive:false});
-  k.addEventListener('touchend',function(e){e.preventDefault();k.classList.remove('on');fetch('/api/release?key='+key)},{passive:false});
+  k.addEventListener('mousedown',function(e){e.preventDefault();kbDown(key);k.classList.add('on');});
+  k.addEventListener('mouseup',function(e){e.preventDefault();kbUp(key);k.classList.remove('on');});
+  k.addEventListener('mouseleave',function(e){kbUp(key);k.classList.remove('on');});
+  k.addEventListener('touchstart',function(e){e.preventDefault();kbDown(key);k.classList.add('on');},{passive:false});
+  k.addEventListener('touchend',function(e){e.preventDefault();kbUp(key);k.classList.remove('on');},{passive:false});
 });
 
 function togglePanel(id){
@@ -1037,18 +1287,22 @@ function getCfgBody(){
 function applyCfg(){
   fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:getCfgBody()}).then(function(r){return r.json()}).then(function(d){if(d.ok)alert('已应用！')});
 }
-function saveToSlot(){
-  fetch('/api/slots').then(function(r){return r.json()}).then(function(d){
+function saveToSlot(mode){
+  window._slotSaveMode=mode||'auto';
+  var url=mode==='seq'?'/api/seq/slots':'/api/slots';
+  document.getElementById('slotModalTitle').textContent=mode==='seq'?L('seqSaveToTitle'):L('saveSlotTitle');
+  document.getElementById('slotModalSub').textContent=mode==='seq'?L('seqSaveToSub'):L('saveSlotSub');
+  fetch(url).then(function(r){return r.json()}).then(function(d){
     window._slotModalData=d;
     var slots=d.slots||[];var active=d.active;
     var html='';
     if(active>=0){
-      var sn=slots[active]?slots[active].name:'槽位'+(active+1);
-      html+='<div class="modal-slot active" onclick="confirmSlotSave('+active+',true)"><span class="slot-num">★</span><span class="slot-name">覆盖当前: '+sn+'</span><span class="slot-badge">当前</span></div>';
+      var sn=slots[active]?slots[active].name:L('slotN')+(active+1);
+      html+='<div class="modal-slot active" onclick="confirmSlotSave('+active+',true)"><span class="slot-num">★</span><span class="slot-name">'+L('overwriteCur')+': '+sn+'</span><span class="slot-badge">'+L('current')+'</span></div>';
     }
     for(var i=0;i<slots.length;i++){
       var s=slots[i];
-      var nm=s.used?s.name:'空槽位';
+      var nm=s.used?s.name:L('emptySlot');
       var cls='modal-slot'+(s.index===active?' active':'');
       html+='<div class="'+cls+'" onclick="confirmSlotSave('+s.index+',false)"><span class="slot-num">'+(s.index+1)+'</span><span class="slot-name'+(s.used?'':' empty')+'">'+nm+'</span></div>';
     }
@@ -1059,13 +1313,21 @@ function saveToSlot(){
 function closeSlotModal(){document.getElementById('slotModal').style.display='none';}
 function confirmSlotSave(idx,isOverride){
   closeSlotModal();
+  var mode=window._slotSaveMode==='seq'?'seq':'auto';
   var slots=window._slotModalData?window._slotModalData.slots:[];
-  var defaultName=slots[idx]&&slots[idx].used?slots[idx].name:'配置'+(idx+1);
-  var name=isOverride?defaultName:prompt('输入配置名称：',defaultName);
+  var defaultName=slots[idx]&&slots[idx].used?slots[idx].name:L('configN')+(idx+1);
+  var name=isOverride?defaultName:prompt(L('enterName'),defaultName);
   if(name===null)return;
   if(!name.trim())name=defaultName;
-  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:getCfgBody()}).then(function(){return fetch('/api/slot/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&name='+encodeURIComponent(name.trim())})}).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){loadSlots();alert('已保存到槽位'+(idx+1));}else{alert(d.error||'保存失败');}
+  var applyPromise;
+  if(mode==='seq'){
+    seqUiChanged();
+    applyPromise=fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(JSON.stringify(seqData))});
+  }else{
+    applyPromise=fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:getCfgBody()});
+  }
+  applyPromise.then(function(){return fetch(mode==='seq'?'/api/seq/slot/save':'/api/slot/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&name='+encodeURIComponent(name.trim())})}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){loadSlots();alert(mode==='seq'?L('seqSavedTo')+(idx+1):L('saved').replace('%d',idx+1));}else{alert(d.error||L('saveFail'));}
   });
 }
 
@@ -1079,6 +1341,8 @@ function updStatus(){
     autoOn=d.autoMode;
     if(d.autoMode){as.className='tag tag-ok';as.textContent='AUTO: ON'}
     else{as.className='tag tag-off';as.textContent='AUTO: OFF'}
+    seqPlaying=!!d.seqPlaying;
+    updSeqStatus();
     var ab=document.getElementById('autoBtn');
     if(d.autoMode){ab.className='btn btn-red';ab.innerHTML='⏹ 关闭'}else{ab.className='btn btn-green';ab.innerHTML='▶ 开启'}
     document.getElementById('upSt').textContent=fmtHMS(d.uptime);
@@ -1222,11 +1486,14 @@ function updateModeBtn(){
   var b=document.getElementById('btnMode');
   if(b)b.textContent=isKbMode()?L('modeFull'):L('modeKb');
 }
-function toggleKbMode(){
-  document.body.classList.toggle('kb-mode');
-  localStorage.setItem('kbMode',isKbMode()?'1':'0');
+function setKbMode(on){
+  document.body.classList.toggle('kb-mode',on);
+  localStorage.setItem('kbMode',on?'1':'0');
   updateModeBtn();
   fitKeyboard();
+}
+function toggleKbMode(){
+  setKbMode(!isKbMode());
 }
 function fitKeyboard(){
   var wrap=document.querySelector('.kb-wrap');
@@ -1260,11 +1527,225 @@ function doSaveBleName(){
   }).catch(function(){});
 }
 
+// ---- 面板模式（自动/顺序） ----
+var panelMode=localStorage.getItem('panelMode')||'auto';
+function isSeqMode(){return panelMode==='seq';}
+function slotsUrl(){return isSeqMode()?'/api/seq/slots':'/api/slots';}
+function slotOp(op){return isSeqMode()?'/api/seq/slot/'+op:'/api/slot/'+op;}
+function applyPanelMode(){
+  var ac=document.getElementById('autoCard');
+  var sc=document.getElementById('seqCard');
+  if(ac)ac.style.display=isSeqMode()?'none':'';
+  if(sc)sc.style.display=isSeqMode()?'':'none';
+  var b=document.getElementById('btnPanelMode');
+  if(b)b.textContent=isSeqMode()?L('panelAuto'):L('panelSeq');
+  refreshSlots();
+}
+function togglePanelMode(){
+  panelMode=isSeqMode()?'auto':'seq';
+  localStorage.setItem('panelMode',panelMode);
+  if(isKbMode())setKbMode(false);   // 键盘模式下切换自动/顺序时退出纯键盘视图
+  applyPanelMode();
+}
+function refreshSlots(){loadSlots();}
+
+// ---- 顺序模式（录制/编辑/播放） ----
+var seqData={name:'',loop:false,loopGapMs:1000,steps:[]};
+var seqRec=false;
+var seqRecSend=true;
+var seqRecDown=0;
+var seqRecLast=0;
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function seqRecPress(key){
+  var now=performance.now();
+  var s=seqData.steps;
+  if(s.length>0&&seqRecLast>0){s[s.length-1].g=Math.max(10,Math.round(now-seqRecLast));}
+  seqRecDown=now;
+  s.push({k:key,h:100,g:100});
+  renderSeqSteps();
+}
+function seqRecRelease(key){
+  var now=performance.now();
+  var s=seqData.steps;
+  if(s.length>0){s[s.length-1].h=Math.max(10,Math.round(now-seqRecDown));}
+  seqRecLast=now;
+  renderSeqSteps();
+}
+function seqRecToggle(){
+  if(seqRec){seqRecStop();}
+  else{seqRecStart();}
+}
+function seqRecStart(){
+  if(seqData.steps.length>0&&!confirm(L('seqClearConfirm')))return;
+  seqData.steps=[];
+  seqRec=true;seqRecDown=0;seqRecLast=0;
+  var b=document.getElementById('seqRecBtn');
+  b.textContent='⏹ '+L('seqRecordStop');b.className='btn btn-red btn-half';
+  renderSeqSteps();updSeqStatus();
+  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled=false'});
+}
+function seqRecStop(){
+  seqRec=false;
+  var b=document.getElementById('seqRecBtn');
+  b.textContent='▶ '+L('seqRecordStart');b.className='btn btn-green btn-half';
+  updSeqStatus();
+  if(seqData.steps.length>0)saveToSlot('seq');
+  else{alert(L('seqNoSteps'));}
+}
+function seqUiChanged(){
+  seqData.loop=document.getElementById('seqLoop').checked;
+  var g=parseInt(document.getElementById('seqLoopGap').value,10);
+  if(isNaN(g))g=1000;
+  seqData.loopGapMs=Math.max(0,Math.min(10000,g));
+}
+function seqApply(){
+  seqUiChanged();
+  return fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(JSON.stringify(seqData))}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){alert(L('applied'));return d;}
+    alert(L('seqInvalid'));return d;
+  }).catch(function(){});
+}
+function seqPlay(){
+  if(seqData.steps.length===0){alert(L('seqNoSteps'));return;}
+  seqUiChanged();
+  fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(JSON.stringify(seqData))}).then(function(){
+    return fetch('/api/seq/play',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'state=on'});
+  }).then(function(){updStatus();});
+}
+function seqStop(){
+  fetch('/api/seq/play',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'state=off'}).then(function(){updStatus();});
+}
+function seqInsert(){
+  seqData.steps.push({k:'',h:100,g:100});
+  renderSeqSteps();
+}
+function seqStepField(i,f,v){
+  if(i>=seqData.steps.length)return;
+  if(f==='h'||f==='g'){var n=parseInt(v,10);if(isNaN(n))n=100;seqData.steps[i][f]=Math.max(10,Math.min(10000,n));}
+  else{seqData.steps[i].k=v;}
+}
+function seqMove(i,d){
+  var s=seqData.steps;var j=i+d;
+  if(j<0||j>=s.length)return;
+  var t=s[i];s[i]=s[j];s[j]=t;renderSeqSteps();
+}
+function seqDel(i){seqData.steps.splice(i,1);renderSeqSteps();}
+function renderSeqSteps(){
+  var box=document.getElementById('seqStepsBox');
+  var s=seqData.steps;
+  var c=document.getElementById('seqStepCount');
+  if(c)c.textContent=s.length;
+  if(!box)return;
+  if(s.length===0){box.innerHTML='<div class="slot-empty">'+L('seqEmpty')+'</div>';return;}
+  var html='';
+  for(var i=0;i<s.length;i++){
+    html+='<div class="seq-row">'
+      +'<input class="seq-key" value="'+esc(s[i].k)+'" placeholder="'+L('seqKey')+'" oninput="seqStepField('+i+',\'k\',this.value)">'
+      +'<input class="seq-t" type="number" min="10" max="10000" value="'+s[i].h+'" title="'+L('seqHold')+'" oninput="seqStepField('+i+',\'h\',this.value)">'
+      +'<input class="seq-t" type="number" min="10" max="10000" value="'+s[i].g+'" title="'+L('seqGap')+'" oninput="seqStepField('+i+',\'g\',this.value)">'
+      +'<button class="seq-mini" onclick="seqMove('+i+',-1)">↑</button>'
+      +'<button class="seq-mini" onclick="seqMove('+i+',1)">↓</button>'
+      +'<button class="seq-mini seq-del" onclick="seqDel('+i+')">✕</button>'
+      +'</div>';
+  }
+  box.innerHTML=html;
+}
+function updSeqStatus(){
+  var el=document.getElementById('seqStatus');
+  if(!el)return;
+  if(seqRec){el.textContent='● '+L('seqRecOn')+' ('+seqData.steps.length+')';}
+  else if(seqPlaying){el.textContent='▶ '+L('seqPlayingNow');}
+  else{el.textContent=L('seqIdleNow');}
+  var pb=document.getElementById('seqPlayBtn');
+  if(pb){pb.textContent=seqPlaying?'⏹ '+L('seqStop'):'▶ '+L('seqPlay');pb.className=seqPlaying?'btn btn-red btn-half':'btn btn-blue btn-half';}
+  var rb=document.getElementById('seqRecBtn');
+  if(rb){rb.textContent=seqRec?('⏹ '+L('seqRecordStop')):('▶ '+L('seqRecordStart'));rb.className=seqRec?'btn btn-red btn-half':'btn btn-green btn-half';}
+}
+function loadSeqCfg(){
+  fetch('/api/seq/config').then(function(r){return r.json()}).then(function(d){
+    if(d&&d.steps){
+      seqData={name:d.name||'',loop:!!d.loop,loopGapMs:d.loopGapMs||1000,steps:d.steps||[]};
+      document.getElementById('seqLoop').checked=seqData.loop;
+      document.getElementById('seqLoopGap').value=seqData.loopGapMs;
+      renderSeqSteps();
+    }
+  }).catch(function(){});
+}
+
+// ---- 全部导出 / 全部导入 ----
+function exportAll(){
+  var form=document.createElement('form');
+  form.method='GET';form.action='/api/config/export-all';
+  document.body.appendChild(form);form.submit();document.body.removeChild(form);
+}
+function importAll(input){
+  if(!input.files||!input.files[0])return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var parsed;
+    try{parsed=JSON.parse(e.target.result);}catch(err){alert(L('impInvalid'));return;}
+    if(!parsed||!parsed.auto||!parsed.seq){alert(L('impInvalid'));return;}
+    Promise.all([fetch('/api/slots').then(function(r){return r.json()}),fetch('/api/seq/slots').then(function(r){return r.json()})]).then(function(res){
+      var exA=res[0].slots||[],exS=res[1].slots||[];
+      var items=[];
+      (parsed.auto||[]).forEach(function(s,i){if(s&&s.used&&s.config)items.push({mode:'auto',name:s.name||('auto'+(i+1)),config:s.config});});
+      (parsed.seq||[]).forEach(function(s,i){if(s&&s.used&&s.config)items.push({mode:'seq',name:s.name||('seq'+(i+1)),config:s.config});});
+      if(items.length===0){alert(L('impNoItem'));return;}
+      var pending=[];
+      items.forEach(function(it){
+        var c=JSON.stringify(it.config);
+        var list=it.mode==='auto'?exA:exS;
+        var same=false;
+        for(var j=0;j<list.length;j++){if(list[j]&&list[j].config&&JSON.stringify(list[j].config)===c){same=true;break;}}
+        if(!same)pending.push(it);
+      });
+      if(pending.length===0){alert(L('impAllSame'));return;}
+      window._impItems=pending;window._impIdx=0;
+      impShow();
+    }).catch(function(){});
+  };
+  reader.readAsText(input.files[0]);
+  input.value='';
+}
+function impShow(){
+  var it=window._impItems[window._impIdx];
+  var html='';
+  html+='<div class="imp-item"><span class="imp-lbl">'+L('impName')+'</span><b>'+esc(it.name)+'</b></div>';
+  html+='<div class="imp-item"><span class="imp-lbl">'+L('impSource')+'</span>'+(it.mode==='auto'?L('panelAuto'):L('panelSeq'))+'</div>';
+  html+='<div class="imp-item"><span class="imp-lbl">'+L('impTargetMode')+'</span><select id="impMode" class="modal-input">'
+      +'<option value="auto"'+((it.mode==='auto')?' selected':'')+'>'+L('panelAuto')+'</option>'
+      +'<option value="seq"'+((it.mode==='seq')?' selected':'')+'>'+L('panelSeq')+'</option>'
+      +'</select></div>';
+  html+='<div class="imp-item"><span class="imp-lbl">'+L('impTargetSlot')+'</span><select id="impSlot" class="modal-input">';
+  for(var i=1;i<=5;i++){html+='<option value="'+(i-1)+'">'+L('impSlotLbl')+' '+(i)+'</option>';}
+  html+='</select></div>';
+  html+='<div class="imp-progress">'+(window._impIdx+1)+' / '+window._impItems.length+'</div>';
+  document.getElementById('impBody').innerHTML=html;
+  document.getElementById('importModal').style.display='flex';
+}
+function impNext(doImport){
+  var it=window._impItems[window._impIdx];
+  if(doImport){
+    var mode=document.getElementById('impMode').value;
+    var slot=document.getElementById('impSlot').value;
+    var url=(mode==='auto'?'/api/slot/import':'/api/seq/slot/import');
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+slot+'&json='+encodeURIComponent(JSON.stringify(it.config))}).catch(function(){});
+  }
+  window._impIdx++;
+  if(window._impIdx>=window._impItems.length){
+    document.getElementById('importModal').style.display='none';
+    alert(L('impDone'));
+    loadSlots();
+  }else{impShow();}
+}
+
 // ---- 配置槽位管理 ----
 var slotData=[];
 
 function loadSlots(){
-  fetch('/api/slots').then(function(r){return r.json()}).then(function(d){
+  fetch(slotsUrl()).then(function(r){return r.json()}).then(function(d){
     slotData=d.slots||[];
     var active=d.active;
     var list=document.getElementById('slotList');
@@ -1279,51 +1760,56 @@ function loadSlots(){
         html+='<span class="slot-name">'+s.name+'</span>';
         if(s.index===active)html+='<span class="slot-badge">当前</span>';
         html+='<div class="slot-btns">';
-        html+='<button class="slot-btn load" onclick="slotLoad('+s.index+')">加载</button>';
-        html+='<button class="slot-btn del" onclick="slotDelete('+s.index+')">删除</button>';
-        html+='<button class="slot-btn exp" onclick="slotExport('+s.index+')">导出</button>';
-        html+='<label class="slot-btn exp import-label">导入<input type="file" accept=".json" onchange="slotImportFile('+s.index+',this)" style="display:none"></label>';
+        html+='<button class="slot-btn load" onclick="slotLoad('+s.index+')">'+L('load')+'</button>';
+        html+='<button class="slot-btn del" onclick="slotDelete('+s.index+')">'+L('del')+'</button>';
+        html+='<button class="slot-btn exp" onclick="slotExport('+s.index+')">'+L('exp')+'</button>';
+        html+='<label class="slot-btn exp import-label">'+L('imp')+'<input type="file" accept=".json" onchange="slotImportFile('+s.index+',this)" style="display:none"></label>';
         html+='</div>';
       }else{
-        html+='<span class="slot-name empty">空槽位</span>';
+        html+='<span class="slot-name empty">'+L('emptySlot')+'</span>';
         html+='<div class="slot-btns">';
-        html+='<button class="slot-btn save" onclick="slotSave('+s.index+')">保存</button>';
-        html+='<label class="slot-btn exp import-label">导入<input type="file" accept=".json" onchange="slotImportFile('+s.index+',this)" style="display:none"></label>';
+        html+='<button class="slot-btn save" onclick="slotSave('+s.index+')">'+L('save')+'</button>';
+        html+='<label class="slot-btn exp import-label">'+L('imp')+'<input type="file" accept=".json" onchange="slotImportFile('+s.index+',this)" style="display:none"></label>';
         html+='</div>';
       }
       html+='</div>';
     }
-    if(slotData.length===0)html='<div class="slot-empty">无可用槽位</div>';
+    if(slotData.length===0)html='<div class="slot-empty">'+L('noSlot')+'</div>';
     list.innerHTML=html;
   }).catch(function(){});
 }
 
 function slotSave(idx){
-  var name=prompt('输入配置名称：','配置'+(idx+1));
+  var name=prompt(L('enterName'),L('configN')+(idx+1));
   if(name===null)return;
-  if(!name.trim())name='配置'+(idx+1);
-  fetch('/api/slot/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&name='+encodeURIComponent(name.trim())}).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){loadSlots();loadCfg();}else{alert(d.error||'保存失败');}
+  if(!name.trim())name=L('configN')+(idx+1);
+  fetch(slotOp('save'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&name='+encodeURIComponent(name.trim())}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){loadSlots();if(isSeqMode())loadSeqCfg();else loadCfg();}else{alert(d.error||L('saveFail'));}
   });
 }
 
 function slotLoad(idx){
-  fetch('/api/slot/load',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx}).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){loadCfg();loadSlots();updSld();updWt();alert('已加载：'+d.name);}else{alert(d.error||'加载失败');}
+  fetch(slotOp('load'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){
+      if(isSeqMode())loadSeqCfg();
+      else{loadCfg();updSld();updWt();}
+      loadSlots();
+      alert(L('loaded')+d.name);
+    }else{alert(d.error||L('loadFail'));}
   });
 }
 
 function slotDelete(idx){
-  if(!confirm('确定删除槽位'+(idx+1)+'的配置？'))return;
-  fetch('/api/slot/delete',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx}).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){loadSlots();}else{alert(d.error||'删除失败');}
+  if(!confirm(L('delConfirm').replace('%d',idx+1)))return;
+  fetch(slotOp('delete'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){loadSlots();}else{alert(d.error||L('delFail'));}
   });
 }
 
 function slotExport(idx){
   var form=document.createElement('form');
   form.method='POST';
-  form.action='/api/slot/export';
+  form.action=slotOp('export');
   var inp=document.createElement('input');
   inp.type='hidden';inp.name='slot';inp.value=idx;
   form.appendChild(inp);
@@ -1337,8 +1823,8 @@ function slotImportFile(idx,input){
   var reader=new FileReader();
   reader.onload=function(e){
     var json=e.target.result;
-    fetch('/api/slot/import',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&json='+encodeURIComponent(json)}).then(function(r){return r.json()}).then(function(d){
-      if(d.ok){loadSlots();alert('导入成功！');}else{alert(d.error||'导入失败');}
+    fetch(slotOp('import'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&json='+encodeURIComponent(json)}).then(function(r){return r.json()}).then(function(d){
+      if(d.ok){loadSlots();alert(L('imported'));}else{alert(d.error||L('importFail'));}
     });
   };
   reader.readAsText(input.files[0]);
@@ -1346,6 +1832,16 @@ function slotImportFile(idx,input){
 }
 
 function exportCurrent(){
+  if(isSeqMode()){
+    seqUiChanged();
+    var blob=new Blob([JSON.stringify(seqData)],{type:'application/json'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=(seqData.name||'seq')+'.json';
+    a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+    return;
+  }
   var form=document.createElement('form');
   form.method='GET';
   form.action='/api/config/export';
@@ -1359,8 +1855,19 @@ function importCurrent(input){
   var reader=new FileReader();
   reader.onload=function(e){
     var json=e.target.result;
+    if(isSeqMode()){
+      var parsed;
+      try{parsed=JSON.parse(json);}catch(err){alert(L('impInvalid'));return;}
+      if(!parsed||!parsed.steps){alert(L('impInvalid'));return;}
+      seqData={name:parsed.name||'',loop:!!parsed.loop,loopGapMs:parsed.loopGapMs||1000,steps:parsed.steps||[]};
+      document.getElementById('seqLoop').checked=seqData.loop;
+      document.getElementById('seqLoopGap').value=seqData.loopGapMs;
+      renderSeqSteps();
+      seqApply();
+      return;
+    }
     fetch('/api/config/import',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(json)}).then(function(r){return r.json()}).then(function(d){
-      if(d.ok){loadCfg();loadSlots();updSld();updWt();alert('已导入到当前配置！');}else{alert(d.error||'导入失败');}
+      if(d.ok){loadCfg();loadSlots();updSld();updWt();alert(L('imported'));}else{alert(d.error||L('importFail'));}
     });
   };
   reader.readAsText(input.files[0]);
@@ -1394,7 +1901,21 @@ var i18n={
       modeKb:'🎹 键盘模式',modeFull:'🧩 全功能',
       bleName:'📡 蓝牙名',bleNameSub:'修改后 BLE 将重启，需重新配对',
       cancel:'取消',bleNameSaved:'已保存，BLE 已重启，请重新配对',
-      bleNameInvalid:'名称需为 1-24 个字符'},
+      bleNameInvalid:'名称需为 1-24 个字符',
+      panelAuto:'⚙️ 自动',panelSeq:'🔁 顺序',exportAll:'📤 全部导出',importAll:'📥 全部导入',
+      seqTitle:'🔁 顺序模式',seqRecordStart:'开始录制',seqRecordStop:'终止',
+      seqPlay:'播放',seqStop:'停止',seqLoop:'🔁 循环',seqRecSend:'录制时发送',
+      seqLoopGap:'循环周期',seqSteps:'步骤',seqInsert:'➕ 插入',
+      seqKey:'键',seqHold:'时长',seqGap:'间隔',seqEmpty:'暂无步骤，点击开始录制',
+      seqNoSteps:'暂无步骤',seqClearConfirm:'将开始新录制，是否清除当前步骤？',
+      seqInvalid:'顺序配置无效',seqSavedTo:'已保存到顺序栏位',seqRecOn:'录制中',
+      seqPlayingNow:'播放中',seqIdleNow:'空闲',seqSaveTo:'💾 保存到栏位',
+      seqSaveToTitle:'💾 保存到顺序栏位',seqSaveToSub:'选择目标栏位：',
+      overwriteCur:'覆盖当前',slotN:'槽位',configN:'配置',
+      saveFail:'保存失败',loadFail:'加载失败',delFail:'删除失败',importFail:'导入失败',noSlot:'无可用槽位',
+      impTitle:'导入配置',impSub:'逐项选择导入目标',impImport:'导入',impSkip:'跳过',
+      impInvalid:'无效的配置文件',impNoItem:'文件中没有已使用的配置',impAllSame:'所有配置均与现有相同，已跳过',
+      impName:'名称',impSource:'来源',impTargetMode:'目标模式',impTargetSlot:'目标栏位',impSlotLbl:'栏位',impDone:'导入完成'},
   en:{pair:'Pair',theme:'Theme',langBtn:'中',about:'About',
       autoMode:'⚙️ Auto Mode',on:'▶ Start',off:'⏹ Stop',
       interval:'Interval',hold:'Hold',total:'Total',
@@ -1415,7 +1936,21 @@ var i18n={
       modeKb:'🎹 Keyboard',modeFull:'🧩 Full',
       bleName:'📡 BLE Name',bleNameSub:'Changing restarts BLE; re-pair required',
       cancel:'Cancel',bleNameSaved:'Saved, BLE restarted, please re-pair',
-      bleNameInvalid:'Name must be 1-24 characters'}
+      bleNameInvalid:'Name must be 1-24 characters',
+      panelAuto:'⚙️ Auto',panelSeq:'🔁 Seq',exportAll:'📤 Export All',importAll:'📥 Import All',
+      seqTitle:'🔁 Sequence Mode',seqRecordStart:'Start Record',seqRecordStop:'Stop',
+      seqPlay:'Play',seqStop:'Stop',seqLoop:'Loop',seqRecSend:'Send while recording',
+      seqLoopGap:'Loop Gap',seqSteps:'Steps',seqInsert:'➕ Insert',
+      seqKey:'Key',seqHold:'Hold',seqGap:'Gap',seqEmpty:'No steps; start recording',
+      seqNoSteps:'No steps yet',seqClearConfirm:'Start new recording? Clear current steps?',
+      seqInvalid:'Invalid sequence',seqSavedTo:'Saved to seq slot',seqRecOn:'Recording',
+      seqPlayingNow:'Playing',seqIdleNow:'Idle',seqSaveTo:'💾 Save to Slot',
+      seqSaveToTitle:'💾 Save to Sequence Slot',seqSaveToSub:'Select target slot:',
+      overwriteCur:'Overwrite current',slotN:'Slot',configN:'Config',
+      saveFail:'Save failed',loadFail:'Load failed',delFail:'Delete failed',importFail:'Import failed',noSlot:'No slots',
+      impTitle:'Import Configs',impSub:'Choose targets one by one',impImport:'Import',impSkip:'Skip',
+      impInvalid:'Invalid config file',impNoItem:'No used configs in file',impAllSame:'All configs identical; skipped',
+      impName:'Name',impSource:'Source',impTargetMode:'Target Mode',impTargetSlot:'Target Slot',impSlotLbl:'Slot',impDone:'Import finished'}
 };
 function L(k){return i18n[lang][k]||k;}
 function toggleLang(){
@@ -1479,32 +2014,33 @@ function applyLang(){
   document.getElementById('bleNameSub').textContent=d.bleNameSub;
   document.getElementById('bleNameSaveBtn').textContent=d.save;
   document.getElementById('bleNameCancelBtn').textContent=d.cancel;
+  // Panel & Sequence & Import
+  document.getElementById('btnPanelMode').textContent=isSeqMode()?d.panelAuto:d.panelSeq;
+  document.getElementById('btnExportAll').textContent=d.exportAll;
+  document.getElementById('lblImportAllText').textContent=d.importAll;
+  document.getElementById('lblSeqMode').textContent=d.seqTitle;
+  document.getElementById('lblSeqLoop').textContent=d.seqLoop;
+  document.getElementById('lblSeqRecSend').textContent=d.seqRecSend;
+  document.getElementById('lblSeqLoopGap').textContent=d.seqLoopGap;
+  document.getElementById('lblSeqSteps').textContent=d.seqSteps;
+  document.getElementById('btnSeqInsert').textContent=d.seqInsert;
+  document.getElementById('btnSeqApply').textContent=d.apply;
+  document.getElementById('btnSeqSaveTo').textContent=d.seqSaveTo;
+  var le=document.getElementById('lblSeqEmpty');if(le)le.textContent=d.seqEmpty;
+  document.getElementById('impTitle').textContent=d.impTitle;
+  document.getElementById('impSub').textContent=d.impSub;
+  document.getElementById('impImportBtn').textContent=d.impImport;
+  document.getElementById('impSkipBtn').textContent=d.impSkip;
+  updSeqStatus();
   // Stats labels
   statsKeyLabels=[d.wForward,d.wBack,d.wLeft,d.wRight,d.tLeft,d.tRight,d.jump,d.crouch,d.prone,d.idle];
   renderStats();
 }
 (function(){var s=localStorage.getItem('lang');if(s){lang=s;applyLang();}})();
-
-__AUTH_JS__
-
-// 初始键盘模式：有记忆用记忆，无记忆用编译期默认（DEFAULT_KB_ONLY_MODE）
-(function(){
-  var saved=localStorage.getItem('kbMode');
-  var kbMode;
-  if(saved==='1'||saved==='0'){kbMode=(saved==='1');}
-  else{kbMode=(__DEFAULT_KB_MODE__==='1');}
-  if(kbMode)document.body.classList.add('kb-mode');
-  updateModeBtn();
-  fitKeyboard();
-})();
-window.addEventListener('resize',fitKeyboard);
-window.addEventListener('orientationchange',function(){setTimeout(fitKeyboard,200);});
-
-loadCfg();updStatus();setInterval(updStatus,1000);setInterval(pollEvents,500);updStats();setInterval(updStats,2000);loadSlots();
 )rawliteral";
 
 #ifdef ENABLE_WEB_AUTH
-  js.replace("__AUTH_JS__", R"rawliteral(
+const char WEB_JS_AUTH[] PROGMEM = R"rawliteral(
 // ---- Web 认证（仅 ENABLE_WEB_AUTH 时启用） ----
 var authToken = localStorage.getItem('espAuthToken') || '';
 var loginOpen = false;
@@ -1582,13 +2118,26 @@ function doChangePwd(){
 }
 
 updateLoginBtn();
-  )rawliteral");
-#else
-  js.replace("__AUTH_JS__", "");
+)rawliteral";
 #endif
 
-  // 注入编译期默认界面模式
-  js.replace("__DEFAULT_KB_MODE__", String(DEFAULT_KB_ONLY_MODE));
+const char WEB_JS_TAIL_A[] PROGMEM = R"rawliteral(
+// 初始键盘模式：有记忆用记忆，无记忆用编译期默认（DEFAULT_KB_ONLY_MODE）
+(function(){
+  var saved=localStorage.getItem('kbMode');
+  var kbMode;
+  if(saved==='1'||saved==='0'){kbMode=(saved==='1');}
+  else{kbMode=(
+)rawliteral";
 
-  return js;
-}
+const char WEB_JS_TAIL_B[] PROGMEM = R"rawliteral(
+==='1');}
+  if(kbMode)document.body.classList.add('kb-mode');
+  updateModeBtn();
+  fitKeyboard();
+})();
+window.addEventListener('resize',fitKeyboard);
+window.addEventListener('orientationchange',function(){setTimeout(fitKeyboard,200);});
+
+applyPanelMode();loadSeqCfg();loadCfg();updStatus();setInterval(updStatus,1000);setInterval(pollEvents,500);updStats();setInterval(updStats,2000);loadSlots();
+)rawliteral";

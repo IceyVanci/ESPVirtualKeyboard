@@ -130,6 +130,17 @@
 #define HID_MOD_RIGHT_ALT    0x40
 #define HID_MOD_RIGHT_GUI    0x80
 
+// Web 修饰键哨兵键码（0xE1~0xE8，与普通键码 0x04~0x63 和未知 0xFF 均不冲突）
+// webKeyToHid 对这些键名返回哨兵值，BleKeyboard::press/release 按位写入修饰字节
+#define HID_SENTINEL_LCTRL   0xE1
+#define HID_SENTINEL_LSHIFT  0xE2
+#define HID_SENTINEL_LALT    0xE3
+#define HID_SENTINEL_LGUI    0xE4
+#define HID_SENTINEL_RCTRL   0xE5
+#define HID_SENTINEL_RSHIFT  0xE6
+#define HID_SENTINEL_RALT    0xE7
+#define HID_SENTINEL_RGUI    0xE8
+
 // ========== LED 配置 ==========
 #define LED_D4              12     // GPIO12 - 按键指示灯
 #define LED_D5              13     // GPIO13 - 状态指示灯
@@ -188,5 +199,8 @@
 // 1 = 开机默认纯虚拟键盘模式（只显示键盘），0 = 开机默认高级模式（完整控制面板）
 // 运行时切换会被记忆（localStorage），此宏仅在浏览器无记忆时决定初始模式
 #define DEFAULT_KB_ONLY_MODE 0
+
+// ========== 顺序模式配置 ==========
+#define SEQ_MAX_STEPS 64        // 单条顺序配置的最大步数
 
 #endif // CONFIG_H

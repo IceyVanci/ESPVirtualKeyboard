@@ -11,10 +11,11 @@ class BleKeyboard;
 class AutoMode;
 struct AutoModeConfig;
 class ConfigManager;
+class SequenceMode;
 
 class WebController {
 public:
-  WebController(BleKeyboard* keyboard, AutoMode* autoMode, ConfigManager* configMgr);
+  WebController(BleKeyboard* keyboard, AutoMode* autoMode, ConfigManager* configMgr, SequenceMode* seqMode);
 
   void begin();
   void handleClient();
@@ -25,6 +26,7 @@ private:
   BleKeyboard*    _keyboard;
   AutoMode*       _autoMode;
   ConfigManager*  _configMgr;
+  SequenceMode*   _seqMode;
 
   void handleRoot();
   void handleKeyPress();
@@ -54,9 +56,18 @@ private:
   void handleConfigExport();
   void handleConfigImport();
 
-  String generateHTML();
-  String generateCSS();
-  String generateJS();
+  // 顺序模式
+  void handleSeqConfig();
+  void handleSeqPlay();
+  void handleSeqSlots();
+  void handleSeqSlotSave();
+  void handleSeqSlotLoad();
+  void handleSeqSlotDelete();
+  void handleSeqSlotImport();
+  void handleSeqSlotExport();
+
+  // 全部导出
+  void handleExportAll();
 
   uint8_t mapWebKeyToHid(const String& key);
 

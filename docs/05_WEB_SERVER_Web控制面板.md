@@ -179,49 +179,6 @@ function toggleLang() { lang = lang === 'zh' ? 'en' : 'zh'; applyLang(); }
 }
 ```
 
-## Keyboard-Only Mode
-
-The "🎹 Keyboard" button in the top bar switches the page to a **pure virtual keyboard view**:
-
-- Hides the auto mode panel, config manager, key log, and stats, leaving only the keyboard area (the top banner is unaffected)
-- Clicking any key sends `/api/press` / `/api/release` for tap input
-- The mode is saved in `localStorage['kbMode']` and persists across refreshes
-- Without a saved value, the initial mode is decided by `DEFAULT_KB_ONLY_MODE` in `config.h` (1 = keyboard-only default, 0 = advanced mode default)
-- Click again ("🧩 Full") to restore the full panel
-
-## Mobile Auto-Scaling
-
-The keyboard area uses `.kb-inner` to wrap the main keyboard, editing/arrow keys, and numpad. `fitKeyboard()` runs on page load, window resize, orientation change, and mode toggles:
-
-```
-scale = min(1, available width / keyboard natural width)
-```
-
-- When the natural keyboard width exceeds the container, `.kb-inner` gets `transform: scale(scale)` and the container height is compressed proportionally
-- On wide desktop screens `scale = 1`, with no visual change
-- On narrow phones the entire keyboard remains fully visible and tappable
-
-## BLE Name Setting
-
-The "📡 BLE Name" button in the top bar opens a settings modal:
-
-- On open, `GET /api/ble/name` pre-fills the current name
-- Enter a new name (1-24 chars) and click Save; `POST /api/ble/name` validates length, writes to NVS, and restarts BLE
-- On success: "Saved, BLE restarted, please re-pair"
-
-## Login Auth (Optional, ENABLE_WEB_AUTH)
-
-Uncomment `//#define ENABLE_WEB_AUTH 1` in `config.h` to enable (disabled by default). When enabled:
-
-- The top bar shows a 🔒/🔓 login button and a "🔑 Change Password" button
-- Write endpoints (key press, auto mode config, BLE reboot, slot read/write, config import, rename) return `401` when not logged in
-- Frontend `fetch` is patched globally: it auto-attaches the `token` parameter and opens the login modal on `401`
-- Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, etc.) stay public so the page loads normally
-- More than `WEB_AUTH_LOCKOUT_THRESHOLD` consecutive login/change failures lock the panel for `WEB_AUTH_LOCKOUT_MS`, returning `429`
-- The session token lives only in device RAM (lost on reboot) and browser `localStorage` (persists across refreshes)
-
-The login and change-password UI is only compiled and rendered when `ENABLE_WEB_AUTH` is enabled; otherwise the page is identical to the previous version.
-
 ## 键盘独占模式
 
 顶部栏「🎹 键盘模式」按钮可将页面切换为**纯虚拟键盘视图**：
@@ -231,6 +188,7 @@ The login and change-password UI is only compiled and rendered when `ENABLE_WEB_
 - 切换状态保存在 `localStorage['kbMode']`，刷新/重开浏览器保持
 - 无记忆时由 `config.h` 的 `DEFAULT_KB_ONLY_MODE` 决定初始模式（1=默认纯键盘，0=默认高级模式）
 - 再次点击按钮（「🧩 全功能」）恢复完整面板
+- 键盘 / 自动 / 顺序为三个**并列**模式：键盘模式下点击「🔁 顺序」或「⚙️ 自动」会退出键盘视图并直接切换到对应面板，三者可从任意状态互达
 
 ## 移动端自适应缩放
 
@@ -264,6 +222,30 @@ scale = min(1, 可用宽度 / 键盘自然宽度)
 - 会话 token 仅存于设备内存（重启即失效）与浏览器 `localStorage`（刷新保持）
 
 登录与修改密码界面为新增 UI，仅在 `ENABLE_WEB_AUTH` 启用时编译渲染；关闭时页面与旧版完全一致。
+
+## 顺序模式（面板切换）
+
+顶部栏「🔁 顺序」按钮可在 **自动模式面板 ⇄ 顺序模式面板** 之间切换（布局沿用自动模式卡片；配置管理卡片随模式显示对应栏位列表）。顺序模式与自动模式数据、栏位、运行完全独立，且**互斥**（开启一方自动停止另一方）。
+
+键盘 / 自动 / 顺序为三个**并列**模式：在纯键盘视图下点击「🔁 顺序」或「⚙️ 自动」会退出键盘视图并直接切换到对应面板。
+
+顺序面板提供：
+
+- **录制**：点击「▶ 开始录制」，然后点击虚拟键盘记录按键序列；每个步骤记录按键名、时长（按住时间）与间隔（到下一步的时长）
+- **录制时发送**：勾选（默认）时录制同时向已连接电脑发送按键；取消勾选则仅记录不发送
+- **终止**：停止录制并弹出「保存到哪个栏位」选择框（5 个顺序栏位）
+- **编辑**：步骤列表支持修改按键名/时长/间隔、删除、上移/下移、插入步骤（空键名为"暂停步骤"）
+- **播放**：将当前序列应用到设备并回放；支持「🔁 循环」开关与「循环周期(ms)」输入（两次循环之间的间隔）
+- **应用 / 保存到栏位**：与自动模式一致
+
+## 一键导入 / 导出全部
+
+顶部栏提供「📤 全部导出」与「📥 全部导入」：
+
+- **导出全部**：`GET /api/config/export-all` 下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位的全部预设
+- **导入全部**：选择文件后由前端解析，与设备现有 10 个栏位内容逐一比对——
+  - 内容相同的配置**自动跳过**
+  - 内容不同的配置**逐项弹窗**，手动选择目标模式（自动/顺序）与目标栏位（1-5），确认后写入对应栏位
 
 ---
 
@@ -446,3 +428,72 @@ Supports dark/light themes with CSS custom properties and `localStorage` persist
     --text: #24292f;
     /* ... */
 }
+```
+
+## Sequence Mode (Panel Toggle)
+
+The "🔁 Seq" button in the top bar switches between the **auto mode panel ⇄ sequence mode panel** (layout follows the auto mode card; the config management card lists slots for the active mode). Sequence mode is fully independent of auto mode in data, slots, and execution, and they are **mutually exclusive** (starting one stops the other).
+
+Keyboard / Auto / Sequence are three **parallel** modes: from the keyboard-only view, clicking "🔁 Seq" or "⚙️ Auto" exits the keyboard view and switches directly to the matching panel.
+
+The sequence panel provides:
+
+- **Record**: Click "▶ Start Record", then click the virtual keyboard to record a key sequence; each step records the key name, duration (hold time), and interval (time to the next step)
+- **Send while recording**: When checked (default), keys are also sent to the connected computer during recording; uncheck to record only
+- **Stop**: Stops recording and pops up a "save to which slot" chooser (5 sequence slots)
+- **Edit**: The step list supports editing key name/duration/interval, deleting, moving up/down, and inserting steps (an empty key name is a "pause step")
+- **Play**: Applies the current sequence to the device and plays it back; supports a "Loop" toggle and a "Loop Gap (ms)" input (interval between two loops)
+- **Apply / Save to Slot**: same as auto mode
+
+## One-Click Export / Import All
+
+The top bar provides "📤 Export All" and "📥 Import All":
+
+- **Export All**: `GET /api/config/export-all` downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots
+- **Import All**: after selecting a file, the frontend parses it and compares each entry against the device's existing 10 slots——
+  - Identical configs are **auto-skipped**
+  - Differing configs are shown **one by one** in a modal, letting you choose the target mode (auto/sequence) and slot (1-5) before writing
+
+## Keyboard-Only Mode
+
+The "🎹 Keyboard" button in the top bar switches the page to a **pure virtual keyboard view**:
+
+- Hides the auto mode panel, config manager, key log, and stats, leaving only the keyboard area (the top banner is unaffected)
+- Clicking any key sends `/api/press` / `/api/release` for tap input
+- The mode is saved in `localStorage['kbMode']` and persists across refreshes
+- Without a saved value, the initial mode is decided by `DEFAULT_KB_ONLY_MODE` in `config.h` (1 = keyboard-only default, 0 = advanced mode default)
+- Click again ("🧩 Full") to restore the full panel
+- Keyboard / Auto / Sequence are three **parallel** modes: from the keyboard-only view, clicking "🔁 Seq" or "⚙️ Auto" exits the keyboard view and switches directly to the matching panel; any mode is reachable from any other
+
+## Mobile Auto-Scaling
+
+The keyboard area uses `.kb-inner` to wrap the main keyboard, editing/arrow keys, and numpad. `fitKeyboard()` runs on page load, window resize, orientation change, and mode toggles:
+
+```
+scale = min(1, available width / keyboard natural width)
+```
+
+- When the natural keyboard width exceeds the container, `.kb-inner` gets `transform: scale(scale)` and the container height is compressed proportionally
+- On wide desktop screens `scale = 1`, with no visual change
+- On narrow phones the entire keyboard remains fully visible and tappable
+
+## BLE Name Setting
+
+The "📡 BLE Name" button in the top bar opens a settings modal:
+
+- On open, `GET /api/ble/name` pre-fills the current name
+- Enter a new name (1-24 chars) and click Save; `POST /api/ble/name` validates length, writes to NVS, and restarts BLE
+- On success: "Saved, BLE restarted, please re-pair"
+
+## Login Auth (Optional, ENABLE_WEB_AUTH)
+
+Uncomment `//#define ENABLE_WEB_AUTH 1` in `config.h` to enable (disabled by default). When enabled:
+
+- The top bar shows a 🔒/🔓 login button and a "🔑 Change Password" button
+- Write endpoints (key press, auto mode config, BLE reboot, slot read/write, config import, rename) return `401` when not logged in
+- Frontend `fetch` is patched globally: it auto-attaches the `token` parameter and opens the login modal on `401`
+- Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, etc.) stay public so the page loads normally
+- More than `WEB_AUTH_LOCKOUT_THRESHOLD` consecutive login/change failures lock the panel for `WEB_AUTH_LOCKOUT_MS`, returning `429`
+- The session token lives only in device RAM (lost on reboot) and browser `localStorage` (persists across refreshes)
+
+The login and change-password UI is only compiled and rendered when `ENABLE_WEB_AUTH` is enabled; otherwise the page is identical to the previous version.

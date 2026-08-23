@@ -4,7 +4,7 @@
 
 Web 控制面板提供 20+ 个 REST API 端点（含可选认证端点），所有端点返回 JSON 格式响应。基础 URL 为 `http://<ESP32_IP>`。
 
-> **认证**：仅在 `config.h` 中启用 `ENABLE_WEB_AUTH` 后生效。启用时，写操作端点需在请求中携带 `token` 参数（如 `/api/press?key=w&token=xxx`），否则返回 `401`；连续失败锁定返回 `429`。只读端点（`/api/status`、`/api/events`、`/api/stats`、`/api/slots`、`/api/config/export`、`/api/slot/export`）始终公开。详见文末「认证端点」。
+> **认证**：仅在 `config.h` 中启用 `ENABLE_WEB_AUTH` 后生效。启用时，写操作端点需在请求中携带 `token` 参数（如 `/api/press?key=w&token=xxx`），否则返回 `401`；连续失败锁定返回 `429`。只读端点（`/api/status`、`/api/events`、`/api/stats`、`/api/slots`、`/api/seq/slots`、`/api/config/export`、`/api/slot/export`、`/api/config/export-all`、`/api/seq/config`（GET）、`/api/seq/slot/export`）始终公开。详见文末「认证端点」。
 
 ## 端点列表
 
@@ -27,7 +27,7 @@ GET /api/press?key=<key>
 ```
 
 **参数**:
-- `key` (必需): 按键名称，参见下方键名映射表
+- `key` (必需): 按键名称，参见下方键名映射表（含 `lctrl`/`lshift`/`lalt`/`rctrl`/`rshift`/`ralt` 等修饰键，按下时写入修饰字节，可组合使用）
 
 **响应**:
 ```json
@@ -39,6 +39,8 @@ GET /api/press?key=<key>
 {"error": "no key"}
 {"error": "unknown"}
 ```
+
+> 注：仅在 BLE 已连接时生效；未连接时返回 `{"ok":true}` 但按键被丢弃，不会缓冲。
 
 ---
 
@@ -125,6 +127,7 @@ GET /api/status
     "bleState": "connected",
     "bleConnected": true,
     "autoMode": false,
+    "seqPlaying": false,
     "currentKey": "",
     "ip": "192.168.1.100",
     "uptime": 3600,
@@ -137,6 +140,7 @@ GET /api/status
 | `bleState` | string | `"connected"` / `"advertising"` / `"stopped"` |
 | `bleConnected` | bool | 是否已连接 BLE |
 | `autoMode` | bool | 自动模式是否开启 |
+| `seqPlaying` | bool | 顺序模式是否播放中 |
 | `currentKey` | string | 当前按下的键名（自动模式） |
 | `ip` | string | ESP32 的 IP 地址 |
 | `uptime` | int | 运行时间（秒） |
@@ -230,15 +234,17 @@ GET /api/slots
 ```json
 {
     "slots": [
-        {"index": 0, "used": true, "name": "游戏配置"},
-        {"index": 1, "used": false, "name": ""},
-        {"index": 2, "used": true, "name": "办公配置"},
-        {"index": 3, "used": false, "name": ""},
-        {"index": 4, "used": false, "name": ""}
+        {"index": 0, "used": true, "name": "游戏配置", "config": {"version":1,"name":"游戏配置","enabled":true}},
+        {"index": 1, "used": false, "name": "", "config": null},
+        {"index": 2, "used": true, "name": "办公配置", "config": {"version":1,"name":"办公配置","enabled":false}},
+        {"index": 3, "used": false, "name": "", "config": null},
+        {"index": 4, "used": false, "name": "", "config": null}
     ],
     "active": 0
 }
 ```
+
+> 每个已使用槽位附带完整 `config`（JSON 格式同「导出当前配置」），供前端导入时与文件内容比对（相同则跳过）。
 
 ---
 
@@ -405,6 +411,66 @@ name=MyKeyboard
 
 ---
 
+### 18. 获取/更新当前顺序配置
+
+```
+GET /api/seq/config
+POST /api/seq/config
+Content-Type: application/x-www-form-urlencoded
+
+json={"version":1,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":300}]}
+```
+
+- **GET**：返回当前顺序配置（含步骤，供前端编辑/录制后应用）
+- **POST**：应用编辑后的顺序配置（校验版本/键名/时长范围）；写操作需登录
+- 若 `json` 解析失败返回 400 `{"error":"invalid seq JSON"}`
+
+---
+
+### 19. 顺序模式播放/停止
+
+```
+POST /api/seq/play
+Content-Type: application/x-www-form-urlencoded
+
+state=on   （或 state=off）
+```
+
+- 启动播放时自动停止自动模式（互斥）
+- 需登录
+
+**响应**:
+```json
+{"ok": true}
+```
+
+---
+
+### 20. 顺序模式槽位管理
+
+```
+GET  /api/seq/slots                          // 列表（含每个槽位的 config 供导入比对）
+POST /api/seq/slot/save  slot=0&name=名称     // 保存当前顺序配置到栏位（需登录）
+POST /api/seq/slot/load  slot=0              // 加载栏位为当前顺序配置（需登录）
+POST /api/seq/slot/delete slot=0             // 删除栏位（需登录）
+POST /api/seq/slot/import slot=0&json={...}  // 导入到栏位（需登录）
+POST /api/seq/slot/export slot=0             // 导出栏位 JSON 文件
+```
+
+与自动模式槽位接口平行，栏位索引 0-4。
+
+---
+
+### 21. 全部导出
+
+```
+GET /api/config/export-all
+```
+
+下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位全部预设（只读，公开）。
+
+---
+
 ## 认证端点（仅 ENABLE_WEB_AUTH 启用时注册）
 
 ### A. 登录
@@ -494,6 +560,10 @@ oldUser=admin&oldPass=12345678&newUser=admin&newPass=newpass
 | `numpadadd` | 小键盘 + | `numpadsub` | 小键盘 - |
 | `numpadmul` | 小键盘 × | `numpaddiv` | 小键盘 ÷ |
 | `numpaddot` | 小键盘 . | `numpadenter` | 小键盘 Enter |
+| `lctrl` | 左 Ctrl | `rctrl` | 右 Ctrl |
+| `lshift` | 左 Shift | `rshift` | 右 Shift |
+| `lalt` | 左 Alt | `ralt` | 右 Alt |
+| `lwin`/`lmeta` | 左 Win/Cmd | `rwin`/`rmeta` | 右 Win/Cmd |
 
 ---
 
@@ -503,7 +573,7 @@ oldUser=admin&oldPass=12345678&newUser=admin&newPass=newpass
 
 The Web control panel provides 20+ REST API endpoints (including optional auth endpoints), all returning JSON responses. The base URL is `http://<ESP32_IP>`.
 
-> **Auth**: Only active when `ENABLE_WEB_AUTH` is enabled in `config.h`. When enabled, write endpoints require a `token` parameter (e.g. `/api/press?key=w&token=xxx`), otherwise `401` is returned; lockout returns `429`. Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, `/api/slots`, `/api/config/export`, `/api/slot/export`) are always public. See "Auth Endpoints" at the end.
+> **Auth**: Only active when `ENABLE_WEB_AUTH` is enabled in `config.h`. When enabled, write endpoints require a `token` parameter (e.g. `/api/press?key=w&token=xxx`), otherwise `401` is returned; lockout returns `429`. Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, `/api/slots`, `/api/seq/slots`, `/api/config/export`, `/api/slot/export`, `/api/config/export-all`, `/api/seq/config` (GET), `/api/seq/slot/export`) are always public. See "Auth Endpoints" at the end.
 
 ## Endpoint List
 
@@ -526,7 +596,7 @@ GET /api/press?key=<key>
 ```
 
 **Parameters**:
-- `key` (required): Key name, see key mapping table below
+- `key` (required): Key name, see key mapping table below (modifier keys `lctrl`/`lshift`/`lalt`/`rctrl`/`rshift`/`ralt` are supported and can be combined)
 
 **Response**:
 ```json
@@ -538,6 +608,8 @@ GET /api/press?key=<key>
 {"error": "no key"}
 {"error": "unknown"}
 ```
+
+> Note: Only effective while BLE is connected; while disconnected the request returns `{"ok":true}` but the key is dropped (not buffered).
 
 ---
 
@@ -624,6 +696,7 @@ GET /api/status
     "bleState": "connected",
     "bleConnected": true,
     "autoMode": false,
+    "seqPlaying": false,
     "currentKey": "",
     "ip": "192.168.1.100",
     "uptime": 3600,
@@ -636,6 +709,7 @@ GET /api/status
 | `bleState` | string | `"connected"` / `"advertising"` / `"stopped"` |
 | `bleConnected` | bool | BLE connection status |
 | `autoMode` | bool | Auto mode status |
+| `seqPlaying` | bool | Whether sequence mode is playing |
 | `currentKey` | string | Currently pressed key (auto mode) |
 | `ip` | string | ESP32 IP address |
 | `uptime` | int | Uptime (seconds) |
@@ -721,15 +795,17 @@ GET /api/slots
 ```json
 {
     "slots": [
-        {"index": 0, "used": true, "name": "Game Config"},
-        {"index": 1, "used": false, "name": ""},
-        {"index": 2, "used": true, "name": "Office Config"},
-        {"index": 3, "used": false, "name": ""},
-        {"index": 4, "used": false, "name": ""}
+        {"index": 0, "used": true, "name": "Game Config", "config": {"version":1,"name":"Game Config","enabled":true}},
+        {"index": 1, "used": false, "name": "", "config": null},
+        {"index": 2, "used": true, "name": "Office Config", "config": {"version":1,"name":"Office Config","enabled":false}},
+        {"index": 3, "used": false, "name": "", "config": null},
+        {"index": 4, "used": false, "name": "", "config": null}
     ],
     "active": 0
 }
 ```
+
+> Each used slot includes its full `config` (same JSON format as "Export Current Config") for the frontend to compare against imported file contents (identical ones are skipped).
 
 ---
 
@@ -890,6 +966,66 @@ name=MyKeyboard
 
 ---
 
+### 18. Get/Update Current Sequence Config
+
+```
+GET /api/seq/config
+POST /api/seq/config
+Content-Type: application/x-www-form-urlencoded
+
+json={"version":1,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":300}]}
+```
+
+- **GET**: Returns the current sequence config (with steps, for editing/apply after recording)
+- **POST**: Applies the edited sequence config (validates version/key names/duration ranges); auth required
+- Returns 400 `{"error":"invalid seq JSON"}` on parse failure
+
+---
+
+### 19. Sequence Playback / Stop
+
+```
+POST /api/seq/play
+Content-Type: application/x-www-form-urlencoded
+
+state=on   (or state=off)
+```
+
+- Starting playback automatically stops auto mode (mutual exclusion)
+- Auth required
+
+**Response**:
+```json
+{"ok": true}
+```
+
+---
+
+### 20. Sequence Slot Management
+
+```
+GET  /api/seq/slots                          // List (each slot includes config for import comparison)
+POST /api/seq/slot/save  slot=0&name=Name     // Save current sequence to slot (auth)
+POST /api/seq/slot/load  slot=0              // Load slot as current sequence (auth)
+POST /api/seq/slot/delete slot=0             // Delete slot (auth)
+POST /api/seq/slot/import slot=0&json={...}  // Import into slot (auth)
+POST /api/seq/slot/export slot=0             // Export slot JSON file
+```
+
+Parallel to the auto mode slot endpoints; slot index 0-4.
+
+---
+
+### 21. Export All
+
+```
+GET /api/config/export-all
+```
+
+Downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots (read-only, public).
+
+---
+
 ## Auth Endpoints (registered only when ENABLE_WEB_AUTH is enabled)
 
 ### A. Login
@@ -979,3 +1115,7 @@ The following key names can be used for the `key` parameter in `/api/press` and 
 | `numpadadd` | Numpad + | `numpadsub` | Numpad - |
 | `numpadmul` | Numpad × | `numpaddiv` | Numpad ÷ |
 | `numpaddot` | Numpad . | `numpadenter` | Numpad Enter |
+| `lctrl` | Left Ctrl | `rctrl` | Right Ctrl |
+| `lshift` | Left Shift | `rshift` | Right Shift |
+| `lalt` | Left Alt | `ralt` | Right Alt |
+| `lwin`/`lmeta` | Left Win/Cmd | `rwin`/`rmeta` | Right Win/Cmd |
