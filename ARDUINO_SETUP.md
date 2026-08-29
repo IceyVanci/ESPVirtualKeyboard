@@ -28,6 +28,10 @@ Arduino IDE 菜单：**工具 → 开发板 → esp32 → ESP32C3 Dev Module**
 | **Flash Mode** | `DIO` | 默认值，通常无需修改 |
 | **Upload Speed** | `921600` | 默认值即可 |
 
+### 依赖库安装
+
+编译前需安装 **ArduinoJson**：**工具 → 管理库**，搜索 `ArduinoJson`，安装 **7.x** 最新版（JSON 序列化/反序列化用）。
+
 ### 串口监视器设置
 
 上传完成后打开串口监视器：

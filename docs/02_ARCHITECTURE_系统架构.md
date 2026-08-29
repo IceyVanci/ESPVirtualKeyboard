@@ -78,7 +78,7 @@ ESP VirtualKeyboard 采用模块化设计，各模块职责清晰、耦合度低
 - 活动槽位自动加载（旧字节格式自动迁移）
 - 认证凭据持久化（`authuser` / `authhash`，SHA-256）
 - 蓝牙设备名称持久化（`blename`）
-- 手写 JSON 序列化/反序列化（无外部依赖）
+- ArduinoJson 7 序列化/反序列化（自动转义；名称经 `sanitizeName` 消毒）
 - 配置导入/导出（含一键导出全部栏位）
 
 ## 数据流
@@ -252,7 +252,7 @@ ESP VirtualKeyboard adopts a modular design with clear responsibilities and low 
 - Auto-load active slot on startup (with legacy binary format migration)
 - Auth credentials persistence (`authuser` / `authhash`, SHA-256)
 - BLE device name persistence (`blename`)
-- Hand-written JSON serialization/deserialization (no external dependencies)
+- ArduinoJson 7 serialization/deserialization (auto-escaping; names sanitized via `sanitizeName`)
 - Configuration import/export (including one-click export of all slots)
 
 ## Data Flow
@@ -341,3 +341,4 @@ loop() each iteration:
     ├── keyboard.checkStuck()   ← Key-stuck timeout check (auto release)
     ├── updateStatusLED()       ← LED status (non-blocking)
     └── handleWiFi()            ← WiFi state machine (connect/reconnect, non-blocking)
+```

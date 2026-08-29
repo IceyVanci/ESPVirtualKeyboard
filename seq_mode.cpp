@@ -9,10 +9,14 @@ SequenceMode::SequenceMode(BleKeyboard* keyboard)
 void SequenceMode::setConfig(const SeqConfig& config) {
   if (_playing) stop();
   _config = config;
-  // 预计算 HID 码（空键名 = 0，表示暂停步骤）
+  // 预计算 HID 码（空键名 = 0，表示暂停步骤）；非法键名降级为暂停，杜绝 0xFF
   for (int i = 0; i < _config.stepCount; i++) {
     String k = _config.steps[i].keyName;
     _hidCodes[i] = (k.length() == 0) ? 0 : webKeyToHid(k);
+    if (_hidCodes[i] == 0xFF) {
+      _hidCodes[i] = 0;
+      _config.steps[i].keyName = "";
+    }
   }
 }
 

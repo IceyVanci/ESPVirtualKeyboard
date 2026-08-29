@@ -199,8 +199,11 @@ scale = min(1, 可用宽度 / 键盘自然宽度)
 ```
 
 - 当键盘自然宽度超出容器时，对 `.kb-inner` 施加 `transform: scale(scale)` 并按比例压缩容器高度
+- 缩放有最小钳制 `KB_MIN_SCALE = 0.55`，避免键过小不可点
+- **≤480px 窄屏**：折叠隐藏右侧编辑/方向键与小键盘（`.kb-right` / `.kb-numpad`），只缩放主键盘，保证可点性
+- 顶栏 `.top-bar` / `.stats` 支持 `flex-wrap` 换行；≤480px 隐藏 uptime/时钟 tag
 - 桌面等宽屏下 `scale = 1`，不产生任何视觉变化
-- 手机等窄屏设备可完整看到并点按整个键盘
+- 触发机制：`requestAnimationFrame` 防抖 + `ResizeObserver` 监听容器 + 横竖屏切换延迟 400ms；`.kb-wrap` 使用 `overflow:hidden` 避免居中溢出裁切
 
 ## 蓝牙名称设置
 
@@ -220,6 +223,12 @@ scale = min(1, 可用宽度 / 键盘自然宽度)
 - `/api/status`、`/api/events`、`/api/stats` 等只读端点保持公开，页面可正常加载
 - 连续登录/改密失败超过 `WEB_AUTH_LOCKOUT_THRESHOLD` 次将锁定 `WEB_AUTH_LOCKOUT_MS`，期间返回 `429`
 - 会话 token 仅存于设备内存（重启即失效）与浏览器 `localStorage`（刷新保持）
+
+**来源校验与安全头（与是否启用认证无关，始终生效）**：
+
+- 所有写接口（含 `/api/press`、`/api/release`）额外校验请求 `Host` 与 `Origin`/`Referer` **同源**，跨源请求返回 `403`（防 CSRF/跨站注入）；无 Origin/Referer 的 curl/局域网脚本放行
+- 根页面返回安全响应头：`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`、`Content-Security-Policy`（仅 `self` + 内联样式/脚本）
+- 所有名称（槽位名、序列名、BLE 名）服务端 `sanitizeName()` 消毒 + 前端 `esc()` 转义，防存储型 XSS
 
 登录与修改密码界面为新增 UI，仅在 `ENABLE_WEB_AUTH` 启用时编译渲染；关闭时页面与旧版完全一致。
 
@@ -245,7 +254,7 @@ scale = min(1, 可用宽度 / 键盘自然宽度)
 - **导出全部**：`GET /api/config/export-all` 下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位的全部预设
 - **导入全部**：选择文件后由前端解析，与设备现有 10 个栏位内容逐一比对——
   - 内容相同的配置**自动跳过**
-  - 内容不同的配置**逐项弹窗**，手动选择目标模式（自动/顺序）与目标栏位（1-5），确认后写入对应栏位
+  - 内容不同的配置**逐项弹窗**，目标槽位**默认自动选到该模式下下一个空槽位**并随导入推进（同一模式连续导入自动分配到不同空槽位），无需手动选槽；仍可切换目标模式、手动改槽位或跳过
 
 ---
 
@@ -452,7 +461,7 @@ The top bar provides "📤 Export All" and "📥 Import All":
 - **Export All**: `GET /api/config/export-all` downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots
 - **Import All**: after selecting a file, the frontend parses it and compares each entry against the device's existing 10 slots——
   - Identical configs are **auto-skipped**
-  - Differing configs are shown **one by one** in a modal, letting you choose the target mode (auto/sequence) and slot (1-5) before writing
+  - Differing configs are shown **one by one** in a modal; the target slot **defaults to the next empty slot for the current mode** and advances automatically as items are imported (consecutive imports of the same mode land on different empty slots), so no manual slot picking is needed; you can still switch target mode, override the slot, or skip
 
 ## Keyboard-Only Mode
 
@@ -474,8 +483,11 @@ scale = min(1, available width / keyboard natural width)
 ```
 
 - When the natural keyboard width exceeds the container, `.kb-inner` gets `transform: scale(scale)` and the container height is compressed proportionally
+- Scaling is clamped to a minimum `KB_MIN_SCALE = 0.55` to keep keys tappable
+- **≤480px narrow screens**: the editing/arrow column and numpad (`.kb-right` / `.kb-numpad`) are folded away (hidden), scaling only the main keyboard for tap-friendliness
+- The top bar `.top-bar` / `.stats` wrap with `flex-wrap`; the uptime/clock tags are hidden ≤480px
 - On wide desktop screens `scale = 1`, with no visual change
-- On narrow phones the entire keyboard remains fully visible and tappable
+- Triggering: `requestAnimationFrame` debounce + `ResizeObserver` on the container + 400ms delay on orientation change; `.kb-wrap` uses `overflow:hidden` to avoid centered-overflow clipping
 
 ## BLE Name Setting
 
@@ -495,5 +507,11 @@ Uncomment `//#define ENABLE_WEB_AUTH 1` in `config.h` to enable (disabled by def
 - Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, etc.) stay public so the page loads normally
 - More than `WEB_AUTH_LOCKOUT_THRESHOLD` consecutive login/change failures lock the panel for `WEB_AUTH_LOCKOUT_MS`, returning `429`
 - The session token lives only in device RAM (lost on reboot) and browser `localStorage` (persists across refreshes)
+
+**Origin check and security headers (always active, independent of auth)**:
+
+- All write endpoints (including `/api/press` and `/api/release`) additionally verify that the request `Host` matches the `Origin`/`Referer` (same-origin); cross-origin requests get `403` (CSRF/cross-site protection). Requests without Origin/Referer (curl, LAN scripts) are allowed
+- The root page sends security headers: `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Content-Security-Policy` (self + inline style/script only)
+- All names (slot/sequence/BLE) are sanitized server-side (`sanitizeName()`) and escaped in the frontend (`esc()`), preventing stored XSS
 
 The login and change-password UI is only compiled and rendered when `ENABLE_WEB_AUTH` is enabled; otherwise the page is identical to the previous version.

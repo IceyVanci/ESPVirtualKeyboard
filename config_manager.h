@@ -47,6 +47,9 @@ public:
   String exportCurrentConfig(const AutoModeConfig& config);
   bool importToCurrentConfig(const String& json, AutoModeConfig& config);
 
+  // 名称消毒：仅保留可打印 ASCII，剔除 " \ < > 及控制字符（用于槽位名/序列名/BLE 名）
+  static String sanitizeName(const String& in);
+
   // 认证凭据（NVS 持久化，默认值来自 config.h）
   String getAuthUser();
   String getAuthPass();                      // 返回密码 SHA-256 哈希
@@ -80,7 +83,7 @@ private:
   String slotDataKey(int slotIndex);
   String slotUsedKey(int slotIndex);
 
-  // JSON 简易生成（避免依赖 ArduinoJson）
+  // JSON 序列化/反序列化（ArduinoJson 7）
   String configToJson(const AutoModeConfig& config, const String& name);
   bool jsonToConfig(const String& json, AutoModeConfig& config, String& name);
 };

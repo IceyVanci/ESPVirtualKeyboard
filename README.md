@@ -86,6 +86,7 @@ config_manager.h/cpp   - 配置管理（NVS 持久化、槽位管理、JSON 导�
 ### 依赖库
 
 - ESP32 Arduino Core（BLE、WiFi、WebServer、Preferences）
+- [ArduinoJson 7.x](https://arduinojson.org/)（JSON 序列化/反序列化，需在库管理器安装）
 
 ---
 

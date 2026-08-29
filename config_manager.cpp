@@ -1,6 +1,7 @@
 #include "config_manager.h"
 #include "keymap.h"
 
+#include <ArduinoJson.h>
 #include <mbedtls/md.h>
 #include <stdio.h>
 
@@ -36,7 +37,7 @@ String ConfigManager::slotUsedKey(int i) {
 
 bool ConfigManager::saveSlot(int slotIndex, const String& name, const AutoModeConfig& config) {
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
-  String trimmed = name.substring(0, SLOT_NAME_MAX_LEN);
+  String trimmed = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
   _prefs.putString(slotNameKey(slotIndex).c_str(), trimmed);
   // 使用 JSON 字符串存储，避免结构体内存布局变更导致旧数据损坏
   _prefs.putString(slotDataKey(slotIndex).c_str(), configToJson(config, trimmed));
@@ -47,7 +48,7 @@ bool ConfigManager::saveSlot(int slotIndex, const String& name, const AutoModeCo
 bool ConfigManager::loadSlot(int slotIndex, AutoModeConfig& config, String& name) {
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
   if (!_prefs.getBool(slotUsedKey(slotIndex).c_str(), false)) return false;
-  name = _prefs.getString(slotNameKey(slotIndex).c_str(), "未命名");
+  name = sanitizeName(_prefs.getString(slotNameKey(slotIndex).c_str(), "未命名"));
 
   // 优先读取 JSON 格式（当前版本）
   String json = _prefs.getString(slotDataKey(slotIndex).c_str(), "");
@@ -119,106 +120,91 @@ bool ConfigManager::loadActiveConfig(AutoModeConfig& config) {
   return loadSlot(slot, config, name);
 }
 
-// ========== JSON 序列化（手写，不依赖 ArduinoJson） ==========
+// ========== JSON 序列化 / 反序列化（ArduinoJson） ==========
+
+String ConfigManager::sanitizeName(const String& in) {
+  String out;
+  out.reserve(in.length());
+  for (unsigned int i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c < 0x20 || c > 0x7E) continue;                       // 控制字符 / 非 ASCII
+    if (c == '"' || c == '\\' || c == '<' || c == '>') continue; // JSON/HTML 危险字符
+    out += c;
+  }
+  return out;
+}
+
+// 将自动模式配置写入 JsonObject（含 version，供单条与汇总导出复用）
+static void fillConfigObject(JsonObject o, const AutoModeConfig& c) {
+  o["version"] = 1;
+  o["enabled"] = c.enabled;
+  o["minIntervalMs"] = c.minIntervalMs;
+  o["maxIntervalMs"] = c.maxIntervalMs;
+  o["minHoldMs"] = c.minHoldMs;
+  o["maxHoldMs"] = c.maxHoldMs;
+  JsonObject w = o["weights"].to<JsonObject>();
+  w["forward"] = c.moveForwardWeight;
+  w["back"] = c.moveBackWeight;
+  w["left"] = c.moveLeftWeight;
+  w["right"] = c.moveRightWeight;
+  w["turnLeft"] = c.turnLeftWeight;
+  w["turnRight"] = c.turnRightWeight;
+  w["jump"] = c.jumpWeight;
+  w["c"] = c.weightC;
+  w["z"] = c.weightZ;
+  w["idle"] = c.idleWeight;
+}
+
+// 将顺序配置写入 JsonObject（含 version）
+static void fillSeqConfigObject(JsonObject o, const SeqConfig& c) {
+  o["version"] = 1;
+  o["loop"] = c.loop;
+  o["loopGapMs"] = c.loopGapMs;
+  JsonArray steps = o["steps"].to<JsonArray>();
+  for (int i = 0; i < c.stepCount; i++) {
+    JsonObject s = steps.add<JsonObject>();
+    s["k"] = c.steps[i].keyName;
+    s["h"] = c.steps[i].holdMs;
+    s["g"] = c.steps[i].gapMs;
+  }
+}
 
 String ConfigManager::configToJson(const AutoModeConfig& c, const String& name) {
-  String j = "{";
-  j += "\"version\":1,";
-  j += "\"name\":\"" + name + "\",";
-  j += "\"enabled\":" + String(c.enabled ? "true" : "false") + ",";
-  j += "\"minIntervalMs\":" + String(c.minIntervalMs) + ",";
-  j += "\"maxIntervalMs\":" + String(c.maxIntervalMs) + ",";
-  j += "\"minHoldMs\":" + String(c.minHoldMs) + ",";
-  j += "\"maxHoldMs\":" + String(c.maxHoldMs) + ",";
-  j += "\"weights\":{";
-  j += "\"forward\":" + String(c.moveForwardWeight, 2) + ",";
-  j += "\"back\":" + String(c.moveBackWeight, 2) + ",";
-  j += "\"left\":" + String(c.moveLeftWeight, 2) + ",";
-  j += "\"right\":" + String(c.moveRightWeight, 2) + ",";
-  j += "\"turnLeft\":" + String(c.turnLeftWeight, 2) + ",";
-  j += "\"turnRight\":" + String(c.turnRightWeight, 2) + ",";
-  j += "\"jump\":" + String(c.jumpWeight, 2) + ",";
-  j += "\"c\":" + String(c.weightC, 2) + ",";
-  j += "\"z\":" + String(c.weightZ, 2) + ",";
-  j += "\"idle\":" + String(c.idleWeight, 2);
-  j += "}}";
-  return j;
-}
-
-// ========== JSON 简易解析 ==========
-
-// 辅助：从 JSON 中提取某个 key 的数值
-static float jsonGetFloat(const String& json, const String& key, float defaultVal) {
-  int idx = json.indexOf("\"" + key + "\"");
-  if (idx < 0) return defaultVal;
-  int colon = json.indexOf(':', idx);
-  if (colon < 0) return defaultVal;
-  int end = json.indexOf(',', colon);
-  if (end < 0) end = json.indexOf('}', colon);
-  if (end < 0) return defaultVal;
-  String val = json.substring(colon + 1, end);
-  val.trim();
-  return val.toFloat();
-}
-
-static long jsonGetLong(const String& json, const String& key, long defaultVal) {
-  int idx = json.indexOf("\"" + key + "\"");
-  if (idx < 0) return defaultVal;
-  int colon = json.indexOf(':', idx);
-  if (colon < 0) return defaultVal;
-  int end = json.indexOf(',', colon);
-  if (end < 0) end = json.indexOf('}', colon);
-  if (end < 0) return defaultVal;
-  String val = json.substring(colon + 1, end);
-  val.trim();
-  return val.toInt();
-}
-
-static bool jsonGetBool(const String& json, const String& key, bool defaultVal) {
-  int idx = json.indexOf("\"" + key + "\"");
-  if (idx < 0) return defaultVal;
-  int colon = json.indexOf(':', idx);
-  if (colon < 0) return defaultVal;
-  String rest = json.substring(colon + 1);
-  rest.trim();
-  return rest.startsWith("true");
-}
-
-static String jsonGetString(const String& json, const String& key, const String& defaultVal) {
-  int idx = json.indexOf("\"" + key + "\"");
-  if (idx < 0) return defaultVal;
-  int colon = json.indexOf(':', idx);
-  if (colon < 0) return defaultVal;
-  int q1 = json.indexOf('"', colon + 1);
-  if (q1 < 0) return defaultVal;
-  int q2 = json.indexOf('"', q1 + 1);
-  if (q2 < 0) return defaultVal;
-  return json.substring(q1 + 1, q2);
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  fillConfigObject(root, c);
+  root["name"] = sanitizeName(name);
+  String out;
+  serializeJson(doc, out);
+  return out;
 }
 
 bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, String& name) {
-  // 验证 version 字段
-  int ver = jsonGetLong(json, "version", 0);
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, json);
+  if (err) return false;
+  int ver = doc["version"] | 0;
   if (ver != 1) return false;
 
-  name = jsonGetString(json, "name", "导入配置");
-  config.enabled = jsonGetBool(json, "enabled", true);
-  config.minIntervalMs = (unsigned long)jsonGetLong(json, "minIntervalMs", DEFAULT_MIN_INTERVAL_MS);
-  config.maxIntervalMs = (unsigned long)jsonGetLong(json, "maxIntervalMs", DEFAULT_MAX_INTERVAL_MS);
-  config.minHoldMs = (unsigned long)jsonGetLong(json, "minHoldMs", DEFAULT_MIN_HOLD_MS);
-  config.maxHoldMs = (unsigned long)jsonGetLong(json, "maxHoldMs", DEFAULT_MAX_HOLD_MS);
+  name = doc["name"] | "导入配置";
+  config.enabled = doc["enabled"] | true;
+  config.minIntervalMs = doc["minIntervalMs"] | DEFAULT_MIN_INTERVAL_MS;
+  config.maxIntervalMs = doc["maxIntervalMs"] | DEFAULT_MAX_INTERVAL_MS;
+  config.minHoldMs = doc["minHoldMs"] | DEFAULT_MIN_HOLD_MS;
+  config.maxHoldMs = doc["maxHoldMs"] | DEFAULT_MAX_HOLD_MS;
 
   // 权重从 weights 子对象提取
-  config.moveForwardWeight = jsonGetFloat(json, "forward", DEFAULT_WEIGHT_FORWARD);
-  config.moveBackWeight = jsonGetFloat(json, "back", DEFAULT_WEIGHT_BACK);
-  config.moveLeftWeight = jsonGetFloat(json, "left", DEFAULT_WEIGHT_LEFT);
-  config.moveRightWeight = jsonGetFloat(json, "right", DEFAULT_WEIGHT_RIGHT);
-  config.turnLeftWeight = jsonGetFloat(json, "turnLeft", DEFAULT_WEIGHT_TURN_LEFT);
-  config.turnRightWeight = jsonGetFloat(json, "turnRight", DEFAULT_WEIGHT_TURN_RIGHT);
-  config.jumpWeight = jsonGetFloat(json, "jump", DEFAULT_WEIGHT_JUMP);
-  config.weightC = jsonGetFloat(json, "c", DEFAULT_WEIGHT_C);
-  config.weightZ = jsonGetFloat(json, "z", DEFAULT_WEIGHT_Z);
-  config.idleWeight = jsonGetFloat(json, "idle", DEFAULT_WEIGHT_IDLE);
+  JsonObject w = doc["weights"];
+  config.moveForwardWeight = w["forward"] | DEFAULT_WEIGHT_FORWARD;
+  config.moveBackWeight = w["back"] | DEFAULT_WEIGHT_BACK;
+  config.moveLeftWeight = w["left"] | DEFAULT_WEIGHT_LEFT;
+  config.moveRightWeight = w["right"] | DEFAULT_WEIGHT_RIGHT;
+  config.turnLeftWeight = w["turnLeft"] | DEFAULT_WEIGHT_TURN_LEFT;
+  config.turnRightWeight = w["turnRight"] | DEFAULT_WEIGHT_TURN_RIGHT;
+  config.jumpWeight = w["jump"] | DEFAULT_WEIGHT_JUMP;
+  config.weightC = w["c"] | DEFAULT_WEIGHT_C;
+  config.weightZ = w["z"] | DEFAULT_WEIGHT_Z;
+  config.idleWeight = w["idle"] | DEFAULT_WEIGHT_IDLE;
 
   // 范围验证
   if (config.minIntervalMs < 100) config.minIntervalMs = 100;
@@ -249,7 +235,7 @@ bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, Str
   config.weightZ = clamp(config.weightZ);
   config.idleWeight = clamp(config.idleWeight);
 
-  name = name.substring(0, SLOT_NAME_MAX_LEN);
+  name = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
   return true;
 }
 
@@ -340,7 +326,7 @@ String ConfigManager::getBleName() {
 }
 
 bool ConfigManager::setBleName(const String& name) {
-  String trimmed = name.substring(0, 24);
+  String trimmed = sanitizeName(name).substring(0, 24);
   if (trimmed.length() == 0) return false;
   _prefs.putString("blename", trimmed);
   return true;
@@ -360,7 +346,7 @@ static long clampLong(long v, long lo, long hi) {
 
 bool ConfigManager::saveSeqSlot(int slotIndex, const String& name, const SeqConfig& config) {
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
-  String trimmed = name.substring(0, SLOT_NAME_MAX_LEN);
+  String trimmed = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
   _prefs.putString(seqSlotNameKey(slotIndex).c_str(), trimmed);
   _prefs.putString(seqSlotDataKey(slotIndex).c_str(), seqConfigToJson(config, trimmed));
   _prefs.putBool(seqSlotUsedKey(slotIndex).c_str(), true);
@@ -370,7 +356,7 @@ bool ConfigManager::saveSeqSlot(int slotIndex, const String& name, const SeqConf
 bool ConfigManager::loadSeqSlot(int slotIndex, SeqConfig& config, String& name) {
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
   if (!_prefs.getBool(seqSlotUsedKey(slotIndex).c_str(), false)) return false;
-  name = _prefs.getString(seqSlotNameKey(slotIndex).c_str(), "未命名");
+  name = sanitizeName(_prefs.getString(seqSlotNameKey(slotIndex).c_str(), "未命名"));
   String json = _prefs.getString(seqSlotDataKey(slotIndex).c_str(), "");
   if (json.length() == 0) return false;
   String jname;
@@ -413,94 +399,84 @@ bool ConfigManager::loadActiveSeqConfig(SeqConfig& config) {
   return loadSeqSlot(slot, config, name);
 }
 
-// ========== 顺序模式 JSON 序列化（手写，风格同自动模式） ==========
+// ========== 顺序模式 JSON 序列化（ArduinoJson，风格同自动模式） ==========
 
 String ConfigManager::seqConfigToJson(const SeqConfig& c, const String& name) {
-  String j = "{";
-  j += "\"version\":1,";
-  j += "\"name\":\"" + name + "\",";
-  j += "\"loop\":" + String(c.loop ? "true" : "false") + ",";
-  j += "\"loopGapMs\":" + String(c.loopGapMs) + ",";
-  j += "\"steps\":[";
-  for (int i = 0; i < c.stepCount; i++) {
-    if (i > 0) j += ",";
-    j += "{\"k\":\"" + c.steps[i].keyName + "\",\"h\":" + String(c.steps[i].holdMs) +
-         ",\"g\":" + String(c.steps[i].gapMs) + "}";
-  }
-  j += "]}";
-  return j;
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  fillSeqConfigObject(root, c);
+  root["name"] = sanitizeName(name);
+  String out;
+  serializeJson(doc, out);
+  return out;
 }
 
 bool ConfigManager::seqJsonToConfig(const String& json, SeqConfig& config, String& name) {
-  int ver = jsonGetLong(json, "version", 0);
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, json);
+  if (err) return false;
+  int ver = doc["version"] | 0;
   if (ver != 1) return false;
-  name = jsonGetString(json, "name", "顺序配置");
-  config.loop = jsonGetBool(json, "loop", false);
-  config.loopGapMs = (uint16_t)clampLong(jsonGetLong(json, "loopGapMs", 1000), 0, 10000);
+  name = doc["name"] | "顺序配置";
+  config.loop = doc["loop"] | false;
+  config.loopGapMs = (uint16_t)clampLong((long)(doc["loopGapMs"] | 1000), 0, 10000);
   config.stepCount = 0;
 
-  int arrIdx = json.indexOf("\"steps\"");
-  if (arrIdx >= 0) {
-    int colon = json.indexOf(':', arrIdx);
-    int q1 = json.indexOf('[', colon);
-    int arrEnd = json.indexOf(']', q1);
-    if (q1 >= 0 && arrEnd > q1) {
-      int pos = q1;
-      while (pos < arrEnd && config.stepCount < SEQ_MAX_STEPS) {
-        int ob = json.indexOf('{', pos);
-        if (ob < 0 || ob > arrEnd) break;
-        int cb = json.indexOf('}', ob);
-        if (cb < 0 || cb > arrEnd) break;
-        String elem = json.substring(ob, cb + 1);
-        String k = jsonGetString(elem, "k", "");
-        if (!(k.length() == 0 || webKeyToHid(k) != 0xFF)) break;  // 非法键名终止
-        SeqStep& s = config.steps[config.stepCount];
-        s.keyName = k;
-        s.holdMs = (uint16_t)clampLong(jsonGetLong(elem, "h", 100), 10, 10000);
-        s.gapMs = (uint16_t)clampLong(jsonGetLong(elem, "g", 100), 10, 10000);
-        config.stepCount++;
-        pos = cb + 1;
-      }
-    }
+  for (JsonObject obj : doc["steps"].as<JsonArray>()) {
+    if (config.stepCount >= SEQ_MAX_STEPS) break;
+    String k = obj["k"] | "";
+    k.toLowerCase();                                  // 容错大写键名
+    if (k.length() > 0 && webKeyToHid(k) == 0xFF) k = "";  // 非法键名降级为暂停步骤
+    SeqStep& s = config.steps[config.stepCount];
+    s.keyName = k;
+    s.holdMs = (uint16_t)clampLong((long)(obj["h"] | 100), 10, 10000);
+    s.gapMs = (uint16_t)clampLong((long)(obj["g"] | 100), 10, 10000);
+    config.stepCount++;
   }
 
-  name = name.substring(0, SLOT_NAME_MAX_LEN);
+  name = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
   return config.stepCount > 0;
 }
 
 // ========== 全部导出 ==========
 
 String ConfigManager::exportAllConfigs() {
-  String j = "{\"app\":\"ESPVirtualKeyboard\",\"version\":1,\"auto\":[";
+  JsonDocument doc;
+  doc["app"] = "ESPVirtualKeyboard";
+  doc["version"] = 1;
+  JsonArray a = doc["auto"].to<JsonArray>();
   for (int i = 0; i < SLOT_COUNT; i++) {
-    if (i > 0) j += ",";
+    JsonObject o = a.add<JsonObject>();
     if (isSlotUsed(i)) {
       AutoModeConfig c;
       String n;
       if (loadSlot(i, c, n)) {
-        j += "{\"used\":true,\"name\":\"" + n + "\",\"config\":" + configToJson(c, n) + "}";
-      } else {
-        j += "{\"used\":false,\"name\":\"\"}";
+        o["used"] = true;
+        o["name"] = sanitizeName(n);
+        fillConfigObject(o["config"].to<JsonObject>(), c);
+        continue;
       }
-    } else {
-      j += "{\"used\":false,\"name\":\"\"}";
     }
+    o["used"] = false;
+    o["name"] = "";
   }
-  j += "],\"seq\":[";
+  JsonArray s = doc["seq"].to<JsonArray>();
   for (int i = 0; i < SLOT_COUNT; i++) {
-    if (i > 0) j += ",";
+    JsonObject o = s.add<JsonObject>();
     if (isSeqSlotUsed(i)) {
       SeqConfig c;
       String n;
       if (loadSeqSlot(i, c, n)) {
-        j += "{\"used\":true,\"name\":\"" + n + "\",\"config\":" + seqConfigToJson(c, n) + "}";
-      } else {
-        j += "{\"used\":false,\"name\":\"\"}";
+        o["used"] = true;
+        o["name"] = sanitizeName(n);
+        fillSeqConfigObject(o["config"].to<JsonObject>(), c);
+        continue;
       }
-    } else {
-      j += "{\"used\":false,\"name\":\"\"}";
     }
+    o["used"] = false;
+    o["name"] = "";
   }
-  j += "]}";
-  return j;
+  String out;
+  serializeJson(doc, out);
+  return out;
 }

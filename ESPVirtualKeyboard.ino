@@ -185,7 +185,13 @@ void startWiFi() {
   Serial.print(WIFI_SSID);
   Serial.println("...");
 
+  // 连接前复位驱动状态（重试时避免旧状态卡死）
+  WiFi.disconnect();
+
   WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   wifiState = WIFI_CONNECTING;
   wifiAttemptStart = millis();
@@ -204,11 +210,13 @@ void handleWiFi() {
         Serial.println(WiFi.localIP());
       } else if (now - wifiAttemptStart >= 10000) {
         if (wifiAttemptCount < 3) {
-          startWiFi();  // 重试
+          startWiFi();  // 软重试（已含 disconnect 复位）
         } else {
           wifiState = WIFI_FAILED;
           Serial.println();
-          Serial.println("[WiFi] 连接失败，稍后自动重试");
+          Serial.print("[WiFi] 连接失败（status=");
+          Serial.print(WiFi.status());
+          Serial.println("），执行射频硬复位后重试");
         }
       }
       break;
@@ -223,11 +231,17 @@ void handleWiFi() {
       break;
 
     case WIFI_FAILED:
-      // 30 秒后重新尝试连接
-      if (now - wifiAttemptStart >= 30000) {
-        wifiAttemptCount = 0;
-        startWiFi();
-      }
+      // 射频硬复位：彻底关闭再重新初始化 WiFi 驱动，规避共存/驱动卡死
+      WiFi.disconnect(true);   // wifiOff=true
+      delay(100);
+      WiFi.mode(WIFI_STA);
+      WiFi.persistent(false);
+      WiFi.setAutoReconnect(true);
+      WiFi.setSleep(false);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      wifiState = WIFI_CONNECTING;
+      wifiAttemptStart = millis();
+      wifiAttemptCount = 0;
       break;
 
     default:

@@ -26,6 +26,9 @@ WebController::WebController(BleKeyboard* keyboard, AutoMode* autoMode, ConfigMa
 
 void WebController::begin() {
   _server = new WebServer(WEB_SERVER_PORT);
+  // esp32 WebServer 默认不保存任意请求头，需显式注册要用到的头
+  const char* reqHeaders[] = { "Origin", "Referer" };
+  _server->collectHeaders(reqHeaders, 2);
   _server->on("/", [this]() { handleRoot(); });
   _server->on("/api/press", HTTP_GET, [this]() { handleKeyPress(); });
   _server->on("/api/release", HTTP_GET, [this]() { handleKeyRelease(); });
@@ -70,6 +73,10 @@ void WebController::handleClient() { _server->handleClient(); }
 String WebController::getLocalIP() { return WiFi.localIP().toString(); }
 
 void WebController::handleRoot() {
+  _server->sendHeader("X-Content-Type-Options", "nosniff");
+  _server->sendHeader("Cache-Control", "no-store");
+  _server->sendHeader("Content-Security-Policy",
+    "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:");
   _server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   _server->send(200, "text/html", "");
   _server->sendContent("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
@@ -186,7 +193,8 @@ void WebController::handleBleReboot() {
 
 void WebController::handleBleName() {
   if (_server->method() == HTTP_GET) {
-    String name = _configMgr ? _configMgr->getBleName() : String(BLE_DEVICE_NAME);
+    String name = _configMgr ? ConfigManager::sanitizeName(_configMgr->getBleName()) : String(BLE_DEVICE_NAME);
+    if (name.length() == 0) name = String(BLE_DEVICE_NAME);
     _server->send(200, "application/json", "{\"name\":\"" + name + "\"}");
     return;
   }
@@ -209,7 +217,39 @@ void WebController::handleBleName() {
 
 // ========== 认证（ENABLE_WEB_AUTH 启用时生效） ==========
 
+// 从 URL 中提取 scheme://authority 的 authority 部分（host[:port]）
+static String urlAuthority(const String& url) {
+  int idx = url.indexOf("://");
+  if (idx < 0) return "";
+  int start = idx + 3;
+  int end = url.indexOf('/', start);
+  if (end < 0) return url.substring(start);
+  return url.substring(start, end);
+}
+
+bool WebController::originGuard() {
+  String host = _server->hostHeader();
+  if (host.length() == 0) return true;  // 无 Host（如 HTTP/1.0 工具）放行
+
+  String origin = _server->header("Origin");
+  if (origin.length() > 0) {
+    if (urlAuthority(origin) == host) return true;
+    _server->send(403, "application/json", "{\"error\":\"forbidden origin\"}");
+    return false;
+  }
+
+  String referer = _server->header("Referer");
+  if (referer.length() > 0) {
+    if (urlAuthority(referer) == host) return true;
+    _server->send(403, "application/json", "{\"error\":\"forbidden origin\"}");
+    return false;
+  }
+
+  return true;  // 无 Origin/Referer（curl、局域网脚本、直接导航）放行
+}
+
 bool WebController::authGuard() {
+  if (!originGuard()) return false;
 #ifdef ENABLE_WEB_AUTH
   if (_authToken.length() == 0 || !_server->hasArg("token") || _server->arg("token") != _authToken) {
     _server->send(401, "application/json", "{\"error\":\"unauthorized\"}");
@@ -297,7 +337,7 @@ void WebController::handleAuthChange() {
 String WebController::generateToken() {
   const char* hex = "0123456789abcdef";
   String t = "";
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < 32; i++) {
     t += String(hex[esp_random() & 0x0F]);
   }
   return t;
@@ -364,7 +404,7 @@ void WebController::handleSlots() {
     }
     j += "{\"index\":" + String(i);
     j += ",\"used\":" + String(s.used ? "true" : "false");
-    j += ",\"name\":\"" + s.name + "\"";
+    j += ",\"name\":\"" + ConfigManager::sanitizeName(s.name) + "\"";
     j += ",\"config\":" + (cfg.length() > 0 ? cfg : "null");
     j += "}";
   }
@@ -378,7 +418,7 @@ void WebController::handleSeqSlots() {
   for (int i = 0; i < SLOT_COUNT; i++) {
     if (i > 0) j += ",";
     bool used = _configMgr->isSeqSlotUsed(i);
-    String nm = used ? _configMgr->getSeqSlotName(i) : "";
+    String nm = used ? ConfigManager::sanitizeName(_configMgr->getSeqSlotName(i)) : "";
     String cfg = "";
     if (used) {
       SeqConfig c;
@@ -434,7 +474,7 @@ void WebController::handleSlotLoad() {
   }
   _autoMode->setConfig(c);
   _configMgr->setActiveSlot(slot);
-  _server->send(200, "application/json", "{\"ok\":true,\"name\":\"" + name + "\"}");
+  _server->send(200, "application/json", "{\"ok\":true,\"name\":\"" + ConfigManager::sanitizeName(name) + "\"}");
 }
 
 void WebController::handleSlotDelete() {
@@ -462,7 +502,8 @@ void WebController::handleSlotExport() {
     return;
   }
   String slotName = _configMgr->getSlotName(slot);
-  String safeName = slotName.length() > 0 ? slotName : "slot" + String(slot);
+  String safeName = ConfigManager::sanitizeName(slotName);
+  if (safeName.length() == 0) safeName = "slot" + String(slot);
   _server->sendHeader("Content-Disposition", "attachment; filename=\"" + safeName + ".json\"");
   _server->send(200, "application/json", json);
 }
@@ -498,9 +539,11 @@ void WebController::handleConfigExport() {
   if (_configMgr) {
     json = _configMgr->exportConfig(c, name);
   } else {
-    json = "{\"version\":1,\"name\":\"" + name + "\",\"enabled\":true}";
+    json = "{\"version\":1,\"name\":\"" + ConfigManager::sanitizeName(name) + "\",\"enabled\":true}";
   }
-  _server->sendHeader("Content-Disposition", "attachment; filename=\"" + name + ".json\"");
+  String safeName = ConfigManager::sanitizeName(name);
+  if (safeName.length() == 0) safeName = "config";
+  _server->sendHeader("Content-Disposition", "attachment; filename=\"" + safeName + ".json\"");
   _server->send(200, "application/json", json);
 }
 
@@ -610,7 +653,7 @@ void WebController::handleSeqSlotLoad() {
   }
   _seqMode->setConfig(c);
   _configMgr->setActiveSeqSlot(slot);
-  _server->send(200, "application/json", "{\"ok\":true,\"name\":\"" + name + "\"}");
+  _server->send(200, "application/json", "{\"ok\":true,\"name\":\"" + ConfigManager::sanitizeName(name) + "\"}");
 }
 
 void WebController::handleSeqSlotDelete() {
@@ -660,7 +703,8 @@ void WebController::handleSeqSlotExport() {
     return;
   }
   String json = _configMgr->seqConfigToJson(c, n);
-  String safeName = n.length() > 0 ? n : "seq" + String(slot);
+  String safeName = ConfigManager::sanitizeName(n);
+  if (safeName.length() == 0) safeName = "seq" + String(slot);
   _server->sendHeader("Content-Disposition", "attachment; filename=\"" + safeName + ".json\"");
   _server->send(200, "application/json", json);
 }
@@ -1056,9 +1100,9 @@ const char WEB_CSS[] PROGMEM = R"rawliteral(
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.5}
-.top-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:linear-gradient(135deg,var(--card),rgba(22,27,34,0.95));border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+.top-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;background:linear-gradient(135deg,var(--card),rgba(22,27,34,0.95));border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
 .brand{font-weight:700;font-size:1.15em;background:linear-gradient(135deg,var(--accent),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.stats{display:flex;gap:6px;align-items:center}
+.stats{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .tag{padding:3px 10px;border-radius:12px;font-size:0.75em;font-weight:600;background:#21262d;color:var(--dim)}
 .tag-ok{background:#0d2818;color:var(--green)}
 .tag-warn{background:#2d1800;color:var(--orange)}
@@ -1093,7 +1137,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 .wt-total{margin-top:6px;padding:4px 0;font-size:0.82em;text-align:right;color:var(--dim)}
 .wt-total .ok{color:var(--green);font-weight:600}
 .wt-total .over{color:var(--red);font-weight:600}
-.kb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;justify-content:center;align-items:flex-start;overflow-x:auto}
+.kb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;justify-content:center;align-items:flex-start;overflow:hidden}
 .kb-inner{display:flex;align-items:flex-start;gap:14px;flex-shrink:0;transform-origin:center top;will-change:transform}
 body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
 .kb{display:inline-flex;flex-direction:column;gap:4px}
@@ -1219,6 +1263,14 @@ body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
   .main{padding:6px}
   .log-box{height:180px}
 }
+@media(max-width:480px){
+  .top-bar{padding:8px 10px;gap:6px}
+  .brand{font-size:1em}
+  .tag{padding:2px 6px;font-size:0.65em}
+  #upSt,#clockSt{display:none}
+  .kb-right,.kb-numpad{display:none}
+  .kb-inner{gap:0}
+}
 )rawliteral";
 
 // ========== JavaScript ==========
@@ -1298,13 +1350,13 @@ function saveToSlot(mode){
     var html='';
     if(active>=0){
       var sn=slots[active]?slots[active].name:L('slotN')+(active+1);
-      html+='<div class="modal-slot active" onclick="confirmSlotSave('+active+',true)"><span class="slot-num">★</span><span class="slot-name">'+L('overwriteCur')+': '+sn+'</span><span class="slot-badge">'+L('current')+'</span></div>';
+      html+='<div class="modal-slot active" onclick="confirmSlotSave('+active+',true)"><span class="slot-num">★</span><span class="slot-name">'+L('overwriteCur')+': '+esc(sn)+'</span><span class="slot-badge">'+L('current')+'</span></div>';
     }
     for(var i=0;i<slots.length;i++){
       var s=slots[i];
       var nm=s.used?s.name:L('emptySlot');
       var cls='modal-slot'+(s.index===active?' active':'');
-      html+='<div class="'+cls+'" onclick="confirmSlotSave('+s.index+',false)"><span class="slot-num">'+(s.index+1)+'</span><span class="slot-name'+(s.used?'':' empty')+'">'+nm+'</span></div>';
+      html+='<div class="'+cls+'" onclick="confirmSlotSave('+s.index+',false)"><span class="slot-num">'+(s.index+1)+'</span><span class="slot-name'+(s.used?'':' empty')+'">'+esc(nm)+'</span></div>';
     }
     document.getElementById('modalSlots').innerHTML=html;
     document.getElementById('slotModal').style.display='flex';
@@ -1409,7 +1461,7 @@ function addLogLine(key,down,ts){
   else if(key==='right')displayName='→';
   else displayName=key.toUpperCase();
   var kc=key==='space'?'log-key space-key':'log-key';
-  div.innerHTML=(clockStr?'<span class="log-time" style="min-width:56px;color:var(--accent)">'+clockStr+'</span>':'')+'<span class="log-time">'+t+'</span><span class="log-icon '+cls+'">'+icon+'</span><span class="'+kc+'">'+displayName+'</span>';
+  div.innerHTML=(clockStr?'<span class="log-time" style="min-width:56px;color:var(--accent)">'+clockStr+'</span>':'')+'<span class="log-time">'+t+'</span><span class="log-icon '+cls+'">'+icon+'</span><span class="'+kc+'">'+esc(displayName)+'</span>';
   logBox.appendChild(div);
   logEntries.push(div);
   logBox.scrollTop=logBox.scrollHeight;
@@ -1495,6 +1547,11 @@ function setKbMode(on){
 function toggleKbMode(){
   setKbMode(!isKbMode());
 }
+var KB_MIN_SCALE=0.55;
+function scheduleFit(){
+  if(window._fitT)return;
+  window._fitT=requestAnimationFrame(function(){window._fitT=null;fitKeyboard();});
+}
 function fitKeyboard(){
   var wrap=document.querySelector('.kb-wrap');
   var inner=document.getElementById('kbInner');
@@ -1506,6 +1563,7 @@ function fitKeyboard(){
   if(natW<=0||avail<=0)return;
   var s=avail/natW;
   if(s>=1){inner.style.transform='';wrap.style.height='';return;}
+  if(s<KB_MIN_SCALE)s=KB_MIN_SCALE;
   inner.style.transform='scale('+s+')';
   wrap.style.height=(inner.offsetHeight*s)+'px';
 }
@@ -1689,6 +1747,7 @@ function importAll(input){
     if(!parsed||!parsed.auto||!parsed.seq){alert(L('impInvalid'));return;}
     Promise.all([fetch('/api/slots').then(function(r){return r.json()}),fetch('/api/seq/slots').then(function(r){return r.json()})]).then(function(res){
       var exA=res[0].slots||[],exS=res[1].slots||[];
+      window._impSlotsA=exA;window._impSlotsS=exS;
       var items=[];
       (parsed.auto||[]).forEach(function(s,i){if(s&&s.used&&s.config)items.push({mode:'auto',name:s.name||('auto'+(i+1)),config:s.config});});
       (parsed.seq||[]).forEach(function(s,i){if(s&&s.used&&s.config)items.push({mode:'seq',name:s.name||('seq'+(i+1)),config:s.config});});
@@ -1703,23 +1762,37 @@ function importAll(input){
       });
       if(pending.length===0){alert(L('impAllSame'));return;}
       window._impItems=pending;window._impIdx=0;
+      window._impUsed={auto:[],seq:[]};
       impShow();
     }).catch(function(){});
   };
   reader.readAsText(input.files[0]);
   input.value='';
 }
+function nextAvailSlot(mode){
+  var list=(mode==='auto'?window._impSlotsA:window._impSlotsS)||[];
+  var used=window._impUsed[mode]||[];
+  for(var j=0;j<list.length;j++){
+    if((!list[j]||!list[j].used) && used.indexOf(j)<0) return j;
+  }
+  return 0;  // 该模式全占满时回退 0，可手动改
+}
+function impModeChanged(){
+  var s=document.getElementById('impSlot');
+  if(s)s.value=nextAvailSlot(document.getElementById('impMode').value);
+}
 function impShow(){
   var it=window._impItems[window._impIdx];
   var html='';
   html+='<div class="imp-item"><span class="imp-lbl">'+L('impName')+'</span><b>'+esc(it.name)+'</b></div>';
   html+='<div class="imp-item"><span class="imp-lbl">'+L('impSource')+'</span>'+(it.mode==='auto'?L('panelAuto'):L('panelSeq'))+'</div>';
-  html+='<div class="imp-item"><span class="imp-lbl">'+L('impTargetMode')+'</span><select id="impMode" class="modal-input">'
+  html+='<div class="imp-item"><span class="imp-lbl">'+L('impTargetMode')+'</span><select id="impMode" class="modal-input" onchange="impModeChanged()">'
       +'<option value="auto"'+((it.mode==='auto')?' selected':'')+'>'+L('panelAuto')+'</option>'
       +'<option value="seq"'+((it.mode==='seq')?' selected':'')+'>'+L('panelSeq')+'</option>'
       +'</select></div>';
+  var defSlot=nextAvailSlot(it.mode);
   html+='<div class="imp-item"><span class="imp-lbl">'+L('impTargetSlot')+'</span><select id="impSlot" class="modal-input">';
-  for(var i=1;i<=5;i++){html+='<option value="'+(i-1)+'">'+L('impSlotLbl')+' '+(i)+'</option>';}
+  for(var i=1;i<=5;i++){html+='<option value="'+(i-1)+'"'+((i-1)===defSlot?' selected':'')+'>'+L('impSlotLbl')+' '+(i)+'</option>';}
   html+='</select></div>';
   html+='<div class="imp-progress">'+(window._impIdx+1)+' / '+window._impItems.length+'</div>';
   document.getElementById('impBody').innerHTML=html;
@@ -1729,7 +1802,9 @@ function impNext(doImport){
   var it=window._impItems[window._impIdx];
   if(doImport){
     var mode=document.getElementById('impMode').value;
-    var slot=document.getElementById('impSlot').value;
+    var slot=parseInt(document.getElementById('impSlot').value,10);
+    if(!window._impUsed[mode])window._impUsed[mode]=[];
+    window._impUsed[mode].push(slot);
     var url=(mode==='auto'?'/api/slot/import':'/api/seq/slot/import');
     fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+slot+'&json='+encodeURIComponent(JSON.stringify(it.config))}).catch(function(){});
   }
@@ -1757,7 +1832,7 @@ function loadSlots(){
       html+='<div class="'+cls+'">';
       html+='<span class="slot-num">'+(s.index+1)+'</span>';
       if(s.used){
-        html+='<span class="slot-name">'+s.name+'</span>';
+        html+='<span class="slot-name">'+esc(s.name)+'</span>';
         if(s.index===active)html+='<span class="slot-badge">当前</span>';
         html+='<div class="slot-btns">';
         html+='<button class="slot-btn load" onclick="slotLoad('+s.index+')">'+L('load')+'</button>';
@@ -2136,8 +2211,12 @@ const char WEB_JS_TAIL_B[] PROGMEM = R"rawliteral(
   updateModeBtn();
   fitKeyboard();
 })();
-window.addEventListener('resize',fitKeyboard);
-window.addEventListener('orientationchange',function(){setTimeout(fitKeyboard,200);});
+window.addEventListener('resize',scheduleFit);
+window.addEventListener('orientationchange',function(){setTimeout(scheduleFit,400);});
+if(window.ResizeObserver){
+  var mainEl=document.querySelector('.main');
+  if(mainEl)new ResizeObserver(scheduleFit).observe(mainEl);
+}
 
 applyPanelMode();loadSeqCfg();loadCfg();updStatus();setInterval(updStatus,1000);setInterval(pollEvents,500);updStats();setInterval(updStats,2000);loadSlots();
 )rawliteral";

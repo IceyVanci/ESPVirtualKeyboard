@@ -44,7 +44,8 @@ private:
   void handleLogin();
   void handleLogout();
   void handleAuthChange();
-  bool authGuard();   // 未授权时发 401 并返回 false；功能关闭时恒为 true
+  bool authGuard();     // 未授权时发 401 并返回 false；功能关闭时仅做来源校验
+  bool originGuard();   // 来源（Origin/Referer）同源校验，防跨站请求
 
   // 配置槽位管理
   void handleSlots();

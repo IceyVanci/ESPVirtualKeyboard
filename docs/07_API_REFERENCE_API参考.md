@@ -6,6 +6,8 @@ Web 控制面板提供 20+ 个 REST API 端点（含可选认证端点），所�
 
 > **认证**：仅在 `config.h` 中启用 `ENABLE_WEB_AUTH` 后生效。启用时，写操作端点需在请求中携带 `token` 参数（如 `/api/press?key=w&token=xxx`），否则返回 `401`；连续失败锁定返回 `429`。只读端点（`/api/status`、`/api/events`、`/api/stats`、`/api/slots`、`/api/seq/slots`、`/api/config/export`、`/api/slot/export`、`/api/config/export-all`、`/api/seq/config`（GET）、`/api/seq/slot/export`）始终公开。详见文末「认证端点」。
 
+> **来源校验**（与认证无关，始终生效）：所有写操作端点额外校验请求 `Host` 与 `Origin`/`Referer` 同源，跨源返回 `403 {"error":"forbidden origin"}`；无 Origin/Referer 的请求（curl/局域网脚本）放行。根页面 `GET /` 返回 `X-Content-Type-Options: nosniff`、`Cache-Control: no-store`、`Content-Security-Policy` 安全响应头。
+
 ## 端点列表
 
 ### 1. 获取控制面板页面
@@ -339,6 +341,8 @@ slot=0&json={...}
 - `slot` (必需): 槽位索引 0-4
 - `json` (必需): JSON 格式的配置数据
 
+**说明**: JSON 由 ArduinoJson **严格解析**（非法返回 400 `{"error":"import failed: invalid JSON"}`）；`name` 字段经 `sanitizeName()` 消毒（剔除 `"` `\` `<` `>` 与控制字符），数值经范围钳制。
+
 **响应**:
 ```json
 {"ok": true}
@@ -369,6 +373,8 @@ json={...}
 
 **参数**:
 - `json` (必需): JSON 格式的配置数据
+
+**说明**: JSON 由 ArduinoJson **严格解析**（非法返回 400 `{"error":"invalid config JSON"}`）；`name` 经 `sanitizeName()` 消毒，数值范围钳制，`version` 必须为 1。
 
 **响应**:
 ```json
@@ -424,6 +430,7 @@ json={"version":1,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":30
 - **GET**：返回当前顺序配置（含步骤，供前端编辑/录制后应用）
 - **POST**：应用编辑后的顺序配置（校验版本/键名/时长范围）；写操作需登录
 - 若 `json` 解析失败返回 400 `{"error":"invalid seq JSON"}`
+- 步骤键名自动 `toLowerCase()` 容错大写；仍非法（无法映射 HID）的键名降级为**暂停步骤**（空键名），不会截断整条序列；`name` 经 `sanitizeName()` 消毒
 
 ---
 
@@ -574,6 +581,8 @@ oldUser=admin&oldPass=12345678&newUser=admin&newPass=newpass
 The Web control panel provides 20+ REST API endpoints (including optional auth endpoints), all returning JSON responses. The base URL is `http://<ESP32_IP>`.
 
 > **Auth**: Only active when `ENABLE_WEB_AUTH` is enabled in `config.h`. When enabled, write endpoints require a `token` parameter (e.g. `/api/press?key=w&token=xxx`), otherwise `401` is returned; lockout returns `429`. Read-only endpoints (`/api/status`, `/api/events`, `/api/stats`, `/api/slots`, `/api/seq/slots`, `/api/config/export`, `/api/slot/export`, `/api/config/export-all`, `/api/seq/config` (GET), `/api/seq/slot/export`) are always public. See "Auth Endpoints" at the end.
+
+> **Origin check** (always active, independent of auth): all write endpoints additionally verify the request `Host` against `Origin`/`Referer` (same-origin); cross-origin requests return `403 {"error":"forbidden origin"}`. Requests without Origin/Referer (curl, LAN scripts) are allowed. The root page `GET /` returns `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, and `Content-Security-Policy` security headers.
 
 ## Endpoint List
 
@@ -896,6 +905,8 @@ slot=0&json={...}
 - `slot` (required): Slot index 0-4
 - `json` (required): JSON config data
 
+**Notes**: JSON is **strictly parsed** with ArduinoJson (malformed input returns 400 `{"error":"import failed: invalid JSON"}`); the `name` field is sanitized via `sanitizeName()` (strips `"` `\` `<` `>` and control chars) and numeric fields are range-clamped.
+
 **Response**:
 ```json
 {"ok": true}
@@ -924,6 +935,8 @@ json={...}
 
 **Parameters**:
 - `json` (required): JSON config data
+
+**Notes**: JSON is **strictly parsed** with ArduinoJson (malformed input returns 400 `{"error":"invalid config JSON"}`); `name` is sanitized via `sanitizeName()`, numeric fields are range-clamped, and `version` must be 1.
 
 **Response**:
 ```json
@@ -979,6 +992,7 @@ json={"version":1,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":30
 - **GET**: Returns the current sequence config (with steps, for editing/apply after recording)
 - **POST**: Applies the edited sequence config (validates version/key names/duration ranges); auth required
 - Returns 400 `{"error":"invalid seq JSON"}` on parse failure
+- Step key names are lowercased automatically (`toLowerCase()`) to tolerate uppercase; keys still unmappable to HID degrade to a **pause step** (empty key name) instead of truncating the sequence; `name` is sanitized via `sanitizeName()`
 
 ---
 

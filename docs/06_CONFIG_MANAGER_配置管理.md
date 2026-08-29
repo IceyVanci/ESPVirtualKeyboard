@@ -114,37 +114,38 @@ if (configMgr.loadActiveConfig(savedConfig)) {
 }
 ```
 
-### 手写 JSON 解析
+### JSON 序列化 / 反序列化（ArduinoJson 7）
 
-为避免依赖 `ArduinoJson` 库，项目实现了简易的 JSON 解析器：
+项目使用 **ArduinoJson 7**（`JsonDocument`）进行序列化与反序列化：
 
 ```cpp
-// 提取数值
-static float jsonGetFloat(const String& json, const String& key, float defaultVal);
-static long jsonGetLong(const String& json, const String& key, long defaultVal);
-static bool jsonGetBool(const String& json, const String& key, bool defaultVal);
-static String jsonGetString(const String& json, const String& key, const String& defaultVal);
+String ConfigManager::configToJson(const AutoModeConfig& c, const String& name);  // serializeJson
+bool   ConfigManager::jsonToConfig(const String& json, AutoModeConfig& c, String& name);  // deserializeJson
+String ConfigManager::seqConfigToJson(const SeqConfig& c, const String& name);
+bool   ConfigManager::seqJsonToConfig(const String& json, SeqConfig& c, String& name);
 ```
 
-解析过程：
-1. 在 JSON 字符串中查找 `"key"`
-2. 找到冒号 `:` 后的值
-3. 提取到下一个逗号 `,` 或右花括号 `}`
-4. 转换为对应类型
+关键行为：
+
+- 序列化时字符串字段（`name` / 步骤 `k`）由 ArduinoJson **自动转义**，杜绝引号/控制字符破坏 JSON 结构
+- 所有名称（槽位名、序列名、BLE 名）在保存与读取时均经 **`sanitizeName()`** 消毒（仅保留可打印 ASCII，剔除 `"` `\` `<` `>` 与控制字符），防止 NVS 数据污染与 XSS
+- 顺序步骤键名解析时自动 `toLowerCase()` 容错大写；仍非法（`webKeyToHid` 返回 `0xFF`）的键名降级为**暂停步骤**（空键名），不会截断整条序列
 
 ### 导入验证
 
 ```cpp
 bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, String& name) {
-    // 1. 验证 version 字段为 1
-    // 2. 提取各个字段
-    // 3. 范围验证：
+    // 1. deserializeJson 严格解析，失败直接返回 false（对应 HTTP 400）
+    // 2. 验证 version 字段为 1
+    // 3. 提取各个字段
+    // 4. 范围验证：
     //    - minIntervalMs: [100, 30000]
     //    - maxIntervalMs: [100, 30000]
     //    - minHoldMs: [10, 5000]
     //    - maxHoldMs: [10, 5000]
     //    - 所有权重: [0, 1]
-    // 4. 自动交换 min/max（如果 min > max）
+    // 5. 自动交换 min/max（如果 min > max）
+    // 6. name 经 sanitizeName 消毒并截断
 }
 ```
 
@@ -213,7 +214,7 @@ String getSeqSlotName(int slot);
 void   setActiveSeqSlot(int slot);   // -1 = 默认
 int    getActiveSeqSlot();
 bool   loadActiveSeqConfig(SeqConfig& config);   // 启动时自动加载活动顺序配置
-String seqConfigToJson(const SeqConfig& config, const String& name);  // 手写 JSON 序列化
+String seqConfigToJson(const SeqConfig& config, const String& name);  // ArduinoJson 序列化
 bool   seqJsonToConfig(const String& json, SeqConfig& config, String& name);
 ```
 
@@ -247,7 +248,7 @@ bool   seqJsonToConfig(const String& json, SeqConfig& config, String& name);
 }
 ```
 
-由 `GET /api/config/export-all` 下载；导入时前端解析后与设备现有栏位逐项比对（相同跳过、不同逐个选择目标）。
+由 `GET /api/config/export-all` 下载；导入时前端解析后与设备现有栏位逐项比对（相同跳过、不同默认分配到该模式下**下一个空槽位**，可手动调整/跳过）。
 
 ---
 
@@ -367,37 +368,38 @@ if (configMgr.loadActiveConfig(savedConfig)) {
 }
 ```
 
-### Hand-written JSON Parsing
+### JSON Serialization / Deserialization (ArduinoJson 7)
 
-To avoid depending on the `ArduinoJson` library, the project implements a simple JSON parser:
+The project uses **ArduinoJson 7** (`JsonDocument`) for serialization and deserialization:
 
 ```cpp
-// Extract numeric values
-static float jsonGetFloat(const String& json, const String& key, float defaultVal);
-static long jsonGetLong(const String& json, const String& key, long defaultVal);
-static bool jsonGetBool(const String& json, const String& key, bool defaultVal);
-static String jsonGetString(const String& json, const String& key, const String& defaultVal);
+String ConfigManager::configToJson(const AutoModeConfig& c, const String& name);  // serializeJson
+bool   ConfigManager::jsonToConfig(const String& json, AutoModeConfig& c, String& name);  // deserializeJson
+String ConfigManager::seqConfigToJson(const SeqConfig& c, const String& name);
+bool   ConfigManager::seqJsonToConfig(const String& json, SeqConfig& c, String& name);
 ```
 
-Parsing process:
-1. Search for `"key"` in JSON string
-2. Find value after colon `:`
-3. Extract until next comma `,` or closing brace `}`
-4. Convert to target type
+Key behaviors:
+
+- String fields (`name` / step `k`) are **auto-escaped** by ArduinoJson during serialization, preventing quotes/control characters from breaking the JSON structure
+- All names (slot names, sequence names, BLE name) pass through **`sanitizeName()`** on save and load (printable ASCII only, strips `"` `\` `<` `>` and control chars) to prevent NVS pollution and XSS
+- Sequence step key names are lowercased on parse (`toLowerCase()`) to tolerate uppercase; keys still invalid (`webKeyToHid` returns `0xFF`) degrade to a **pause step** (empty key) instead of truncating the whole sequence
 
 ### Import Validation
 
 ```cpp
 bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, String& name) {
-    // 1. Verify version field is 1
-    // 2. Extract each field
-    // 3. Range validation:
+    // 1. Strict deserializeJson; fail (HTTP 400) on parse errors
+    // 2. Verify version field is 1
+    // 3. Extract each field
+    // 4. Range validation:
     //    - minIntervalMs: [100, 30000]
     //    - maxIntervalMs: [100, 30000]
     //    - minHoldMs: [10, 5000]
     //    - maxHoldMs: [10, 5000]
     //    - All weights: [0, 1]
-    // 4. Auto-swap min/max (if min > max)
+    // 5. Auto-swap min/max (if min > max)
+    // 6. name sanitized via sanitizeName and truncated
 }
 ```
 
@@ -466,7 +468,7 @@ String getSeqSlotName(int slot);
 void   setActiveSeqSlot(int slot);   // -1 = default
 int    getActiveSeqSlot();
 bool   loadActiveSeqConfig(SeqConfig& config);   // Auto-load active seq config on startup
-String seqConfigToJson(const SeqConfig& config, const String& name);  // Hand-written JSON serialization
+String seqConfigToJson(const SeqConfig& config, const String& name);  // ArduinoJson serialization
 bool   seqJsonToConfig(const String& json, SeqConfig& config, String& name);
 ```
 
@@ -500,4 +502,4 @@ Parse validation: version must be 1, steps ≤ `SEQ_MAX_STEPS` (64), hold/gap cl
 }
 ```
 
-Downloaded via `GET /api/config/export-all`. On import, the frontend parses the file and compares each entry with the device's existing slots (identical ones are skipped, differing ones are placed one by one).
+Downloaded via `GET /api/config/export-all`. On import, the frontend parses the file and compares each entry with the device's existing slots (identical ones are skipped; differing ones default to the **next empty slot** for their mode, auto-advancing as items are imported — adjustable/skippable).
