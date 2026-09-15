@@ -61,6 +61,15 @@ public:
   String getBleName();
   bool setBleName(const String& name);       // 1~24 字符，返回是否成功
 
+  // WiFi 凭据（NVS 持久化，供串口配网使用；编译期默认来自 config.h）
+  String getWifiSsid();                      // NVS 值，无则返回空串
+  String getWifiPass();
+  bool hasWifiCredentials();                 // NVS 中 SSID 非空
+  bool setWifiCredentials(const String& ssid, const String& pass);  // ssid 为空则清除凭据
+  bool isWifiOverride();                     // NVS 覆盖标志 wifiovr
+  bool setWifiOverride(bool enable);
+  bool clearWifiCredentials();               // 清除 ssid/pass/override
+
   // 顺序模式槽位（5 个独立栏位，与自动模式槽位互不影响）
   bool saveSeqSlot(int slotIndex, const String& name, const SeqConfig& config);
   bool loadSeqSlot(int slotIndex, SeqConfig& config, String& name);

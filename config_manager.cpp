@@ -332,6 +332,62 @@ bool ConfigManager::setBleName(const String& name) {
   return true;
 }
 
+// ========== WiFi 凭据（NVS 持久化，串口配网） ==========
+
+// 剔除控制字符与分隔符（\r \n \0 及 0x00-0x1F）
+static String sanitizeWifiValue(const String& in) {
+  String out;
+  out.reserve(in.length());
+  for (unsigned int i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c < 0x20) continue;
+    out += c;
+  }
+  return out;
+}
+
+String ConfigManager::getWifiSsid() {
+  return _prefs.getString("wifissid", "");
+}
+
+String ConfigManager::getWifiPass() {
+  return _prefs.getString("wifipass", "");
+}
+
+bool ConfigManager::hasWifiCredentials() {
+  return _prefs.getString("wifissid", "").length() > 0;
+}
+
+bool ConfigManager::setWifiCredentials(const String& ssid, const String& pass) {
+  String s = sanitizeWifiValue(ssid).substring(0, 32);
+  String p = sanitizeWifiValue(pass).substring(0, 63);
+  if (s.length() == 0) {
+    // 空 SSID 语义：清除 NVS 凭据
+    _prefs.remove("wifissid");
+    _prefs.remove("wifipass");
+    return true;
+  }
+  _prefs.putString("wifissid", s);
+  _prefs.putString("wifipass", p);
+  return true;
+}
+
+bool ConfigManager::isWifiOverride() {
+  return _prefs.getBool("wifiovr", false);
+}
+
+bool ConfigManager::setWifiOverride(bool enable) {
+  _prefs.putBool("wifiovr", enable);
+  return true;
+}
+
+bool ConfigManager::clearWifiCredentials() {
+  _prefs.remove("wifissid");
+  _prefs.remove("wifipass");
+  _prefs.remove("wifiovr");
+  return true;
+}
+
 // ========== 顺序模式槽位（NVS 持久化） ==========
 
 static String seqSlotNameKey(int i) { return "sq" + String(i) + "n"; }

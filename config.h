@@ -2,9 +2,22 @@
 #define CONFIG_H
 
 // ========== WiFi 配置 ==========
-// 请修改为你家的 WiFi 信息
+// 请修改为你家的 WiFi 信息（编译期凭据，优先级最高；IDE 直接烧录行为不变）。
+// 置空时：固件启动后进入串口配网等待，可用 firmware-updater 网页工具「仅配网」写入 NVS 凭据。
+// 注意：仓库保留此处的真实/占位凭据；分发包由 build_package.cmd 在副本中强制置空并断言，不含任何凭据。
 #define WIFI_SSID     "Debug"
 #define WIFI_PASSWORD "12345678"
+
+// ========== 串口配网（Serial Provisioning） ==========
+// 1 = 启用：通过 USB 串口以 "@" 前缀单行 JSON 协议配网（firmware-updater 工具使用）
+// 0 = 彻底关闭串口配网功能
+#define ENABLE_SERIAL_PROVISION 1
+
+// WiFi 连接超时（毫秒）：超过后进入退避重试
+#define WIFI_CONNECT_TIMEOUT_MS 15000
+// 重试退避起始间隔（毫秒），每次失败翻倍，上限 WIFI_MAX_BACKOFF_MS
+#define WIFI_RETRY_BACKOFF_MS 2000
+#define WIFI_MAX_BACKOFF_MS 30000
 
 // ========== BLE 配置 ==========
 #define BLE_DEVICE_NAME "ESP Virtual Keyboard"
@@ -187,7 +200,7 @@
 #define WEB_AUTH_LOCKOUT_MS 30000
 
 // ========== 固件信息 ==========
-#define FW_VERSION "v1.0"
+#define FW_VERSION "20260916"
 #define FW_BUILD_DATE __DATE__   // 编译日期
 #define FW_BUILD_TIME __TIME__   // 编译时间
 
