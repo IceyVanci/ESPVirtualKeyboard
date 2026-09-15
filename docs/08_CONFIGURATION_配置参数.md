@@ -7,15 +7,27 @@
 ## WiFi 配置
 
 ```cpp
-#define WIFI_SSID     "Debug"
-#define WIFI_PASSWORD "12345678"
+#define WIFI_SSID     "你的WiFi名称"    // 编译期凭据（优先级最高；置空则进入串口配网等待）
+#define WIFI_PASSWORD "你的WiFi密码"
+
+#define ENABLE_SERIAL_PROVISION 1    // 串口配网开关（1=启用，0=关闭）
+#define WIFI_CONNECT_TIMEOUT_MS 15000   // 单次连接超时
+#define WIFI_RETRY_BACKOFF_MS 2000      // 重试退避起始间隔（翻倍递增）
+#define WIFI_MAX_BACKOFF_MS 30000       // 退避上限
 ```
 
-**说明**：ESP32 将作为 STA 模式连接到此 WiFi 网络。
+**说明**：ESP32 将作为 STA 模式连接到此 WiFi 网络。仓库中的 `config.h` 保留你填写的编译期凭据；**分发包的固件由 `build_package.cmd` 在副本中强制置空凭据**（不含任何真实信息），此类固件用「仅配网」配置。
+**凭据优先级**（启动时解析，配网后即时刷新）：
+1. NVS 覆盖标志 `wifiovr` 且 NVS 凭据非空 → 使用 NVS 凭据（持久）
+2. 编译期 `WIFI_SSID` 非空 → 使用编译期凭据（IDE 行为不变）
+3. NVS 凭据非空 → 使用 NVS 凭据（持久）
+4. 全部为空 → 进入 `WIFI_PROVISION` 配网等待
+
+**串口配网**：凭据为空时，设备启动后等待 USB 串口配网（`firmware-updater` 工具「仅配网」写入 NVS）。协议为 `@` 前缀单行 JSON（115200），普通串口输出不受影响；`ENABLE_SERIAL_PROVISION` 置 0 可彻底关闭。
 **注意**：
 - ESP32-C3 仅支持 2.4GHz 频段，不支持 5GHz
 - SSID 和密码区分大小写
-- 连接采用**非阻塞状态机**：单次尝试最长 10 秒、最多 3 次，失败后每 30 秒重试；期间 Web 服务器始终可用
+- 连接采用**非阻塞状态机**：单次尝试最长 15 秒，软重试 2 次并按指数退避（2s→4s→8s…上限 30s），之后射频硬复位重试；期间 Web 服务器与 BLE 始终可用
 
 ## BLE 配置
 
@@ -266,14 +278,29 @@ Web 修饰键哨兵键码（`webKeyToHid` 对这些键名返回哨兵值，`BleK
 ## WiFi Configuration
 
 ```cpp
-#define WIFI_SSID     "Debug"
-#define WIFI_PASSWORD "12345678"
+#define WIFI_SSID     "Your_WiFi_Name"    // compile-time credentials (highest priority; empty → serial provisioning wait)
+#define WIFI_PASSWORD "Your_WiFi_Password"
+
+#define ENABLE_SERIAL_PROVISION 1    // serial provisioning switch (1=enabled, 0=disabled)
+#define WIFI_CONNECT_TIMEOUT_MS 15000
+#define WIFI_RETRY_BACKOFF_MS 2000
+#define WIFI_MAX_BACKOFF_MS 30000
 ```
+
+**Credential priority** (resolved at boot, refreshed after provisioning):
+1. NVS override flag `wifiovr` with non-empty NVS credentials → NVS
+2. Non-empty compile-time `WIFI_SSID` → compile-time (IDE behavior unchanged)
+3. Non-empty NVS credentials → NVS
+4. All empty → enter `WIFI_PROVISION` wait state
+
+The repo `config.h` keeps the credentials you fill in; **distribution packages are built with forced-empty credentials** by `build_package.cmd` (the build copy is emptied and asserted) — configure those with "仅配网 / provision only".
+
+**Serial provisioning**: with empty credentials, the device waits for USB serial provisioning (use the `firmware-updater` tool's "仅配网 / provision only"). Protocol: single-line JSON prefixed with `@` @ 115200 baud; normal serial output is unaffected; set `ENABLE_SERIAL_PROVISION` to 0 to disable entirely.
 
 **Note**:
 - ESP32-C3 only supports 2.4GHz band, not 5GHz
 - SSID and password are case-sensitive
-- Connection uses a **non-blocking state machine**: max 10s per attempt, up to 3 attempts, retry every 30s after failure; the Web server stays available throughout
+- Connection uses a **non-blocking state machine**: max 15s per attempt, 2 soft retries with exponential backoff (2s→4s→…cap 30s), then one RF hard-reset retry; the Web server and BLE stay available throughout
 
 ## BLE Configuration
 

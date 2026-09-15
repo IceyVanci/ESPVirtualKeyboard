@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP Virtual Keyboard · 固件升级工具</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ESP Virtual Keyboard · 固件升级工具</h1>
+    <p class="sub">通过 USB 数据线（Type-C）直连设备升级固件</p>
+  </header>
+
+  <div class="card" id="fw-card">
+    <div class="card-title">固件包信息</div>
+    <div id="fw-info" class="muted">正在读取固件包信息…</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">升级操作</div>
+    <div class="steps">
+      <div class="step"><span class="num">1</span>用 USB 数据线连接键盘设备与电脑</div>
+      <div class="step"><span class="num">2</span>点击「连接设备」，在弹窗中选择设备串口</div>
+      <div class="step"><span class="num">3</span>填写 WiFi 信息（可选）后点击「开始升级」</div>
+    </div>
+
+    <div class="erase-row">
+      <label><input type="checkbox" id="erase-all" checked> 擦除全部数据（含已保存的槽位/序列/BLE 名/密码）</label>
+    </div>
+
+    <div class="wifi-block">
+      <div class="wifi-title">WiFi 配网（可选，随升级自动完成）</div>
+      <div class="wifi-row">
+        <label for="wifi-ssid">SSID</label>
+        <input type="text" id="wifi-ssid" maxlength="32" placeholder="WiFi 名称">
+        <label for="wifi-pass">密码</label>
+        <input type="password" id="wifi-pass" maxlength="63" placeholder="WiFi 密码">
+      </div>
+      <div class="wifi-row">
+        <label><input type="checkbox" id="wifi-override"> 覆盖固件内置的 WiFi 凭据（持久生效）</label>
+      </div>
+      <div id="wifi-status" class="wifi-status muted">固件内置凭据：—｜NVS 凭据：—｜覆盖：—｜WiFi 状态：—</div>
+    </div>
+
+    <div class="btn-row">
+      <button id="btn-connect" class="btn">连接设备</button>
+      <button id="btn-flash" class="btn primary" disabled>开始升级</button>
+      <button id="btn-provision" class="btn" disabled>仅配网</button>
+      <button id="btn-clear-wifi" class="btn danger" disabled>清除配网信息</button>
+    </div>
+
+    <div id="status" class="status">未连接设备</div>
+
+    <div id="progress-wrap" class="hidden">
+      <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+      <div id="progress-text" class="progress-text">0%</div>
+    </div>
+
+    <div id="browser-warn" class="warn hidden">
+      当前浏览器不支持 Web Serial（需 Chrome / Edge 89+）。<br>
+      请改用命令行工具：双击目录中的 <b>flash_cli.bat</b>（仅烧录，不含配网）
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">日志</div>
+    <pre id="log" class="log"></pre>
+  </div>
+
+  <div class="card notice">
+    <div class="card-title">注意事项</div>
+    <ul>
+      <li>升级过程中<b>请勿断电、请勿拔线</b>，否则可能变砖</li>
+      <li>勾选「擦除全部数据」会清空配置（槽位/序列/BLE 名/已保存 WiFi）；取消勾选则保留配置</li>
+      <li>本固件<b>不含内置 WiFi 凭据</b>；未填写 WiFi 时烧录后可用「仅配网」配置</li>
+      <li>未勾选「覆盖」时：对空凭据固件配网持久生效；对含内置凭据固件仅临时生效，重启回内置</li>
+      <li>合宙 CORE ESP32-C3（原生 USB）免驱动，即插即用</li>
+      <li>升级失败或变砖，可重新运行本工具或 <b>flash_cli.bat</b> 重刷恢复；保留旧版升级包即可回退旧固件</li>
+    </ul>
+  </div>
+
+  <footer>本地服务仅监听 127.0.0.1，关闭「一键升级」窗口即退出</footer>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div id="modal-title" class="modal-title">✅ 完成</div>
+    <div id="modal-msg" class="modal-msg"></div>
+    <button id="modal-ok" class="btn primary">确定</button>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -51,6 +51,8 @@ Arduino IDE 菜单：**工具 → 开发板 → esp32 → ESP32C3 Dev Module**
    ================================
    ```
 
+> 注：在 `config.h` 填写 `WIFI_SSID`/`WIFI_PASSWORD` 即可正常连接；若两者为空，`[WiFi]` 行会显示「未配置凭据，进入串口配网等待」——可用 `firmware-updater` 工具「仅配网」写入（NVS 持久）。分发包的固件由构建脚本强制置空凭据，请用「仅配网」。
+
 ### 常见问题排查
 
 | 问题 | 原因 | 解决方案 |
@@ -113,6 +115,8 @@ After uploading, open the serial monitor:
    System Ready!
    ================================
    ```
+
+> Note: fill `WIFI_SSID`/`WIFI_PASSWORD` in `config.h` for a normal connection. If both are empty, the `[WiFi]` line shows "no credentials, waiting for serial provisioning" — use the `firmware-updater` tool's "仅配网 / provision only" (persisted in NVS). Distribution packages ship with forced-empty credentials; use provision-only with them.
 
 ### Troubleshooting
 

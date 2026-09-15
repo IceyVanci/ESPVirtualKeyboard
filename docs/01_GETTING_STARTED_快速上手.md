@@ -26,13 +26,18 @@
 
 ## 配置 WiFi
 
-1. 打开 `config.h` 文件
-2. 修改以下两行：
-   ```cpp
-   #define WIFI_SSID     "你的WiFi名称"
-   #define WIFI_PASSWORD "你的WiFi密码"
-   ```
-3. 其他参数使用默认值即可，后续可通过 Web 控制面板调整
+两种方式（可任选；编译期凭据优先级最高）：
+
+**方式 A：直接填在 `config.h` 中**（编译期凭据，优先级最高）
+
+```cpp
+#define WIFI_SSID     "你的WiFi名称"
+#define WIFI_PASSWORD "你的WiFi密码"
+```
+
+**方式 B：烧录后用「仅配网」写入**（NVS 持久，无需重新编译）
+
+使用 `firmware-updater` 网页工具（双击 `一键升级.bat`）→ 连接设备 → 填写 WiFi → 点「仅配网」；配网信息保存在设备 NVS，重启后自动连接。**分发包（固件升级工具 zip）的固件由构建脚本强制置空凭据**，请走方式 B。
 
 ## 编译烧录
 
@@ -131,13 +136,18 @@
 
 ## WiFi Configuration
 
-1. Open `config.h`
-2. Modify these two lines:
-   ```cpp
-   #define WIFI_SSID     "Your_WiFi_Name"
-   #define WIFI_PASSWORD "Your_WiFi_Password"
-   ```
-3. Other parameters can use default values and be adjusted later via the Web panel
+Two ways (either is fine; compile-time credentials have the highest priority):
+
+**Option A: fill them in `config.h`** (compile-time credentials, highest priority)
+
+```cpp
+#define WIFI_SSID     "Your_WiFi_Name"
+#define WIFI_PASSWORD "Your_WiFi_Password"
+```
+
+**Option B: use "仅配网 / provision only" after flashing** (persisted in NVS, no recompile)
+
+Open the `firmware-updater` web tool (`一键升级.bat`), connect the device, enter WiFi, click "仅配网". Credentials are saved in NVS and applied automatically after reboot. **Distribution packages (firmware updater zips) are built with forced-empty credentials** — use Option B with them.
 
 ## Compile & Flash
 

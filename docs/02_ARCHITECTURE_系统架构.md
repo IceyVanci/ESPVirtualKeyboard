@@ -140,11 +140,9 @@ Serial.begin(115200)  ← 串口初始化
     ↓
 pinMode(LED_D4/LED_D5)  ← LED 初始化 + 开机快闪
     ↓
-startWiFi()  ← 非阻塞连接 WiFi（开机等待最多 10 秒）
+configMgr.begin()  ← 配置管理器初始化（读取 NVS：蓝牙名/WiFi 凭据）
     ↓
-configTime()  ← NTP 时间同步
-    ↓
-configMgr.begin()  ← 配置管理器初始化（读取 NVS）
+resolveWifiCredentials()  ← 解析凭据优先级（覆盖标志>编译期>NVS>空）
     ↓
 keyboard.setDeviceName(configMgr.getBleName())  ← 应用蓝牙名称
     ↓
@@ -154,7 +152,9 @@ loadActiveConfig()  ← 加载上次保存的配置
     ↓
 webCtrl.begin()  ← Web 服务器启动
     ↓
-系统就绪！串口输出 IP 地址
+startWiFi()  ← 非阻塞连接 WiFi（空凭据则进入串口配网等待 WIFI_PROVISION）
+    ↓
+系统就绪！串口输出 IP（连上后打印）
 ```
 
 ## 主循环任务调度
@@ -166,7 +166,8 @@ loop() 每轮执行:
     ├── seqMode.update()        ← 顺序模式回放状态机更新
     ├── keyboard.checkStuck()   ← 卡键安全超时检查（自动释放）
     ├── updateStatusLED()       ← LED 状态指示（非阻塞）
-    └── handleWiFi()            ← WiFi 状态机（连接/重连，非阻塞）
+    └── handleWiFi()            ← WiFi 状态机（连接/重连/配网等待，非阻塞，指数退避）
+        └── handleSerialProvision()  ← 串口配网协议解析（"@" 前缀单行 JSON，仅 USB）
 ```
 
 ---
@@ -314,11 +315,9 @@ Serial.begin(115200)  ← Serial init
     ↓
 pinMode(LED_D4/LED_D5)  ← LED init + startup blink
     ↓
-startWiFi()  ← Non-blocking WiFi connect (boot wait max 10s)
+configMgr.begin()  ← Config manager init (read NVS: BLE name/WiFi creds)
     ↓
-configTime()  ← NTP time sync
-    ↓
-configMgr.begin()  ← Config manager init (read NVS)
+resolveWifiCredentials()  ← Resolve credential priority (override>compile>NVS>empty)
     ↓
 keyboard.setDeviceName(configMgr.getBleName())  ← Apply BLE name
     ↓
@@ -328,7 +327,9 @@ loadActiveConfig()  ← Load last saved config
     ↓
 webCtrl.begin()  ← Web server start
     ↓
-System ready! Serial output IP address
+startWiFi()  ← Non-blocking WiFi connect (empty creds → WIFI_PROVISION wait)
+    ↓
+System ready! Serial prints IP when connected
 ```
 
 ## Main Loop Task Scheduling
@@ -340,5 +341,6 @@ loop() each iteration:
     ├── seqMode.update()        ← Sequence mode playback state machine
     ├── keyboard.checkStuck()   ← Key-stuck timeout check (auto release)
     ├── updateStatusLED()       ← LED status (non-blocking)
-    └── handleWiFi()            ← WiFi state machine (connect/reconnect, non-blocking)
+    └── handleWiFi()            ← WiFi state machine (connect/reconnect/provision wait, exponential backoff)
+        └── handleSerialProvision()  ← Serial provisioning protocol ("@" JSON lines, USB only)
 ```
