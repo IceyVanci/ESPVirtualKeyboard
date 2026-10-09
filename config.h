@@ -200,7 +200,7 @@
 #define WEB_AUTH_LOCKOUT_MS 30000
 
 // ========== 固件信息 ==========
-#define FW_VERSION "20260916"
+#define FW_VERSION "20261009"
 #define FW_BUILD_DATE __DATE__   // 编译日期
 #define FW_BUILD_TIME __TIME__   // 编译时间
 

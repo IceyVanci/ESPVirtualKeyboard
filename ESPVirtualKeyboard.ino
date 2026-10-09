@@ -72,10 +72,12 @@ void sendPong();
 void sendWifiSaved(bool overrideOn);
 void sendWifiConnecting();
 void sendWifiFailed();
+void sendWifiConnected();
 void sendStatus();
 #else
 static inline void sendWifiConnecting() {}
 static inline void sendWifiFailed() {}
+static inline void sendWifiConnected() {}
 static inline void sendStatus() {}
 #endif
 
@@ -286,6 +288,7 @@ void handleWiFi() {
         Serial.print("[WiFi] 已连接! IP: ");
         Serial.println(WiFi.localIP());
         syncNtp();
+        sendWifiConnected();
         sendStatus();
       } else if (now - wifiAttemptStart >= WIFI_CONNECT_TIMEOUT_MS) {
         if (wifiAttemptCount < 2) {
@@ -388,6 +391,15 @@ void sendWifiFailed() {
   JsonDocument doc;
   doc["evt"] = "wifi_failed";
   doc["status"] = (int)WiFi.status();
+  String out;
+  serializeJson(doc, out);
+  Serial.println("@" + out);
+}
+
+void sendWifiConnected() {
+  JsonDocument doc;
+  doc["evt"] = "wifi_connected";
+  doc["ip"] = WiFi.localIP().toString();
   String out;
   serializeJson(doc, out);
   Serial.println("@" + out);
