@@ -112,6 +112,7 @@ k.addEventListener('touchend', function(e) {
 - **应用**：将当前面板设置发送到后端
 - **保存到配置**：弹窗选择目标槽位保存
 - **开启/关闭**：切换自动模式启停
+- **当前配置名**：面板顶部显示当前生效的预设名（未保存到栏位时为导入文件中的名称；顺序面板同理）
 
 ## 配置管理
 
@@ -129,6 +130,7 @@ k.addEventListener('touchend', function(e) {
 - **导入当前**：从 JSON 文件导入配置
 - **槽位导出**：下载指定槽位配置为 JSON 文件
 - **槽位导入**：从 JSON 文件导入到指定槽位
+- **名称保留**：导入时文件名（顶层/条目级 `name`）会保存为栏位名，导出→导入往返不丢失；支持中文名称（空名自动回退为「配置N」/「序列N」）
 
 ## 按键日志
 
@@ -240,19 +242,21 @@ scale = min(1, 可用宽度 / 键盘自然宽度)
 
 顺序面板提供：
 
-- **录制**：点击「▶ 开始录制」，然后点击虚拟键盘记录按键序列；每个步骤记录按键名、时长（按住时间）与间隔（到下一步的时长）
+- **录制**：点击「▶ 开始录制」，然后点击虚拟键盘记录按键序列；每个步骤记录按键名、时长（按住时间）与间隔（到下一步的时长）；开始录制会自动停止正在进行的播放
 - **录制时发送**：勾选（默认）时录制同时向已连接电脑发送按键；取消勾选则仅记录不发送
 - **终止**：停止录制并弹出「保存到哪个栏位」选择框（5 个顺序栏位）
-- **编辑**：步骤列表支持修改按键名/时长/间隔、删除、上移/下移、插入步骤（空键名为"暂停步骤"）
-- **播放**：将当前序列应用到设备并回放；支持「🔁 循环」开关与「循环周期(ms)」输入（两次循环之间的间隔）
-- **应用 / 保存到栏位**：与自动模式一致
+- **编辑（核心集）**：步骤列表支持选中、插入（选中步前/末尾）、复制、删除、上移/下移、置顶/置底、拖拽排序（移动端用 ↑↓ 兜底）；每步可设重复次数（1–99）；空键名为"暂停步骤"
+- **随机能力**：每步可开「🎲 随机键」（复用自动模式 10 键权重；抽到空闲按延时处理）与「≈ 随机时序」（hold/gap 各自 min–max，播放时正态取值，min=max 即固定）
+- **播放 / 停止**：播放按钮在播放中切换为停止；播放前自动应用当前序列；支持「🔁 循环」与「循环周期(ms)」
+- **体积与上限守卫**：工具栏实时显示步骤 `x/64` 与体积 `x.x/3.0KB`；达到 64 步禁止再插入，超过 3000B 时禁止应用/保存/播放并明确提示
+- **应用 / 保存到栏位**：与自动模式一致；保存失败会提示具体原因（含「设备存储不足」）
 
 ## 一键导入 / 导出全部
 
 顶部栏提供「📤 全部导出」与「📥 全部导入」：
 
-- **导出全部**：`GET /api/config/export-all` 下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位的全部预设
-- **导入全部**：选择文件后由前端解析，与设备现有 10 个栏位内容逐一比对——
+- **导出全部**：`GET /api/config/export-all` 下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位的全部预设（名称同时写入条目级 `name` 与 `config.name`）
+- **导入全部**：名称（含中文）随配置一并导入到目标栏位；选择文件后由前端解析，与设备现有 10 个栏位内容逐一比对——
   - 内容相同的配置**自动跳过**
   - 内容不同的配置**逐项弹窗**，目标槽位**默认自动选到该模式下下一个空槽位**并随导入推进（同一模式连续导入自动分配到不同空槽位），无需手动选槽；仍可切换目标模式、手动改槽位或跳过
 
@@ -372,6 +376,7 @@ The frontend uses `setInterval` to poll backend status:
 - **Apply**: Send current panel settings to backend
 - **Save to Slot**: Modal to select target slot for saving
 - **Toggle On/Off**: Start/stop auto mode
+- **Current config name**: the panel header shows the active preset name (the imported file's name when not saved to a slot; same for the sequence panel)
 
 ## Configuration Management
 
@@ -389,6 +394,7 @@ Displays 5 configuration slots, each showing:
 - **Import Current**: Import config from JSON file
 - **Slot Export**: Download specified slot config as JSON file
 - **Slot Import**: Import JSON file into specified slot
+- **Name preservation**: imported names (top-level/item-level `name`) are kept as the slot name, surviving export → import round-trips; Chinese names are supported (empty names fall back to "配置N" / "序列N")
 
 ## Key Log
 
@@ -447,19 +453,21 @@ Keyboard / Auto / Sequence are three **parallel** modes: from the keyboard-only 
 
 The sequence panel provides:
 
-- **Record**: Click "▶ Start Record", then click the virtual keyboard to record a key sequence; each step records the key name, duration (hold time), and interval (time to the next step)
+- **Record**: Click "▶ Start Record", then click the virtual keyboard to record a key sequence; each step records the key name, duration (hold time), and interval (time to the next step); starting a recording automatically stops any ongoing playback
 - **Send while recording**: When checked (default), keys are also sent to the connected computer during recording; uncheck to record only
 - **Stop**: Stops recording and pops up a "save to which slot" chooser (5 sequence slots)
-- **Edit**: The step list supports editing key name/duration/interval, deleting, moving up/down, and inserting steps (an empty key name is a "pause step")
-- **Play**: Applies the current sequence to the device and plays it back; supports a "Loop" toggle and a "Loop Gap (ms)" input (interval between two loops)
-- **Apply / Save to Slot**: same as auto mode
+- **Edit (core set)**: The step list supports selection, inserting (before selected/at end), duplicating, deleting, moving up/down, move-to-top/bottom, drag-and-drop reordering (use ↑↓ on touch devices); each step has a repeat count (1–99); an empty key name is a "pause step"
+- **Random capabilities**: per step, toggle "🎲 Random key" (reuses auto-mode 10-key weights; an idle pick behaves as a delay) and "≈ Random timing" (independent min–max for hold/gap, sampled from a normal distribution at playback; min=max means fixed)
+- **Play / Stop**: the play button toggles to stop while playing; the current sequence is applied before playback; supports "🔁 Loop" and "Loop Gap (ms)"
+- **Size & step guards**: the toolbar shows steps `x/64` and size `x.x/3.0KB` live; inserting stops at 64 steps, and Apply/Save/Play are blocked with a clear message when size exceeds 3000B
+- **Apply / Save to Slot**: same as auto mode; failures show the specific reason (including "device storage full")
 
 ## One-Click Export / Import All
 
 The top bar provides "📤 Export All" and "📥 Import All":
 
-- **Export All**: `GET /api/config/export-all` downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots
-- **Import All**: after selecting a file, the frontend parses it and compares each entry against the device's existing 10 slots——
+- **Export All**: `GET /api/config/export-all` downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots (names are written to both the item-level `name` and `config.name`)
+- **Import All**: names (including Chinese) are imported together with the config into the target slot; after selecting a file, the frontend parses it and compares each entry against the device's existing 10 slots——
   - Identical configs are **auto-skipped**
   - Differing configs are shown **one by one** in a modal; the target slot **defaults to the next empty slot for the current mode** and advances automatically as items are imported (consecutive imports of the same mode land on different empty slots), so no manual slot picking is needed; you can still switch target mode, override the slot, or skip
 

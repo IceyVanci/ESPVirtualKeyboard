@@ -37,7 +37,8 @@ String ConfigManager::slotUsedKey(int i) {
 
 bool ConfigManager::saveSlot(int slotIndex, const String& name, const AutoModeConfig& config) {
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
-  String trimmed = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
+  String trimmed = truncateName(sanitizeName(name), SLOT_NAME_MAX_LEN);
+  if (trimmed.length() == 0) trimmed = "配置" + String(slotIndex + 1);  // 空名兜底
   _prefs.putString(slotNameKey(slotIndex).c_str(), trimmed);
   // 使用 JSON 字符串存储，避免结构体内存布局变更导致旧数据损坏
   _prefs.putString(slotDataKey(slotIndex).c_str(), configToJson(config, trimmed));
@@ -122,16 +123,57 @@ bool ConfigManager::loadActiveConfig(AutoModeConfig& config) {
 
 // ========== JSON 序列化 / 反序列化（ArduinoJson） ==========
 
+// UTF-8 感知的名称消毒：保留可打印 ASCII 与合法多字节 UTF-8（中文/emoji），
+// 剔除控制字符、JSON/HTML 危险字符（" \ < >）以及无效/截断字节
 String ConfigManager::sanitizeName(const String& in) {
   String out;
   out.reserve(in.length());
-  for (unsigned int i = 0; i < in.length(); i++) {
-    char c = in[i];
-    if (c < 0x20 || c > 0x7E) continue;                       // 控制字符 / 非 ASCII
-    if (c == '"' || c == '\\' || c == '<' || c == '>') continue; // JSON/HTML 危险字符
-    out += c;
+  unsigned int i = 0;
+  while (i < in.length()) {
+    uint8_t c = (uint8_t)in[i];
+    if (c < 0x20 || c == 0x7F) { i++; continue; }                          // ASCII 控制字符
+    if (c == '"' || c == '\\' || c == '<' || c == '>') { i++; continue; }  // JSON/HTML 危险字符
+    if (c < 0x80) { out += (char)c; i++; continue; }                       // ASCII 可打印
+
+    // 多字节 UTF-8 序列解码
+    int len = 0;
+    uint32_t cp = 0;
+    if ((c & 0xE0) == 0xC0) { len = 2; cp = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { len = 3; cp = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { len = 4; cp = c & 0x07; }
+    else { i++; continue; }                                                // 无效首字节
+    if (i + (unsigned int)len > in.length()) { i++; continue; }            // 截断序列
+    bool ok = true;
+    for (int k = 1; k < len; k++) {
+      uint8_t cc = (uint8_t)in[i + k];
+      if ((cc & 0xC0) != 0x80) { ok = false; break; }
+      cp = (cp << 6) | (cc & 0x3F);
+    }
+    // 非法/控制码点（C1 控制符、BOM）丢弃
+    if (!ok || cp < 0x80 || cp > 0x10FFFF || (cp >= 0x80 && cp <= 0x9F) || cp == 0xFEFF) {
+      i++;
+      continue;
+    }
+    out.concat(in.c_str() + i, len);
+    i += len;
   }
   return out;
+}
+
+// 按 Unicode 码点截断（不会切断多字节字符）
+String ConfigManager::truncateName(const String& in, unsigned int maxChars) {
+  unsigned int i = 0, n = 0;
+  while (i < in.length() && n < maxChars) {
+    uint8_t c = (uint8_t)in[i];
+    unsigned int len = 1;
+    if ((c & 0xE0) == 0xC0) len = 2;
+    else if ((c & 0xF0) == 0xE0) len = 3;
+    else if ((c & 0xF8) == 0xF0) len = 4;
+    if (i + len > in.length()) break;
+    i += len;
+    n++;
+  }
+  return in.substring(0, i);
 }
 
 // 将自动模式配置写入 JsonObject（含 version，供单条与汇总导出复用）
@@ -155,17 +197,30 @@ static void fillConfigObject(JsonObject o, const AutoModeConfig& c) {
   w["idle"] = c.idleWeight;
 }
 
-// 将顺序配置写入 JsonObject（含 version）
+// 将顺序配置写入 JsonObject（v2：按省略规则输出默认字段）
 static void fillSeqConfigObject(JsonObject o, const SeqConfig& c) {
-  o["version"] = 1;
+  o["version"] = 2;
   o["loop"] = c.loop;
   o["loopGapMs"] = c.loopGapMs;
   JsonArray steps = o["steps"].to<JsonArray>();
   for (int i = 0; i < c.stepCount; i++) {
+    const SeqStep& st = c.steps[i];
     JsonObject s = steps.add<JsonObject>();
-    s["k"] = c.steps[i].keyName;
-    s["h"] = c.steps[i].holdMs;
-    s["g"] = c.steps[i].gapMs;
+    s["k"] = st.keyName;
+    s["h"] = st.holdMs;
+    s["g"] = st.gapMs;
+    if (st.repeat > 1) s["r"] = st.repeat;
+    if (st.randomKey) s["rk"] = 1;
+    if (st.holdMinMs > 0) {
+      JsonArray hr = s["hr"].to<JsonArray>();
+      hr.add(st.holdMinMs);
+      hr.add(st.holdMaxMs);
+    }
+    if (st.gapMinMs > 0) {
+      JsonArray gr = s["gr"].to<JsonArray>();
+      gr.add(st.gapMinMs);
+      gr.add(st.gapMaxMs);
+    }
   }
 }
 
@@ -235,7 +290,7 @@ bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, Str
   config.weightZ = clamp(config.weightZ);
   config.idleWeight = clamp(config.idleWeight);
 
-  name = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
+  name = truncateName(sanitizeName(name), SLOT_NAME_MAX_LEN);
   return true;
 }
 
@@ -326,7 +381,7 @@ String ConfigManager::getBleName() {
 }
 
 bool ConfigManager::setBleName(const String& name) {
-  String trimmed = sanitizeName(name).substring(0, 24);
+  String trimmed = truncateName(sanitizeName(name), 24);
   if (trimmed.length() == 0) return false;
   _prefs.putString("blename", trimmed);
   return true;
@@ -402,10 +457,29 @@ static long clampLong(long v, long lo, long hi) {
 
 bool ConfigManager::saveSeqSlot(int slotIndex, const String& name, const SeqConfig& config) {
   if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
-  String trimmed = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
-  _prefs.putString(seqSlotNameKey(slotIndex).c_str(), trimmed);
-  _prefs.putString(seqSlotDataKey(slotIndex).c_str(), seqConfigToJson(config, trimmed));
-  _prefs.putBool(seqSlotUsedKey(slotIndex).c_str(), true);
+  String trimmed = truncateName(sanitizeName(name), SLOT_NAME_MAX_LEN);
+  if (trimmed.length() == 0) trimmed = "序列" + String(slotIndex + 1);  // 空名兜底
+
+  // 写前体积复检（防御式；能写进 NVS 的配置必然已过守卫）
+  String json;
+  if (!seqConfigToJsonChecked(config, trimmed, json)) return false;
+
+  String nameKey = seqSlotNameKey(slotIndex);
+  String dataKey = seqSlotDataKey(slotIndex);
+  String usedKey = seqSlotUsedKey(slotIndex);
+
+  if (trimmed.length() > 0) {
+    if (_prefs.putString(nameKey.c_str(), trimmed) == 0) return false;
+  } else {
+    _prefs.remove(nameKey.c_str());
+  }
+  if (_prefs.putString(dataKey.c_str(), json) == 0) {
+    // NVS 满/写入失败：清理半截数据并回滚已用标记，避免「已用栏位读不出」
+    _prefs.remove(dataKey.c_str());
+    _prefs.putBool(usedKey.c_str(), false);
+    return false;
+  }
+  _prefs.putBool(usedKey.c_str(), true);
   return true;
 }
 
@@ -416,7 +490,7 @@ bool ConfigManager::loadSeqSlot(int slotIndex, SeqConfig& config, String& name) 
   String json = _prefs.getString(seqSlotDataKey(slotIndex).c_str(), "");
   if (json.length() == 0) return false;
   String jname;
-  if (!seqJsonToConfig(json, config, jname)) return false;
+  if (seqJsonToConfig(json, config, jname) != SEQ_PARSE_OK) return false;
   if (jname.length() > 0) name = jname;
   return true;
 }
@@ -467,31 +541,73 @@ String ConfigManager::seqConfigToJson(const SeqConfig& c, const String& name) {
   return out;
 }
 
-bool ConfigManager::seqJsonToConfig(const String& json, SeqConfig& config, String& name) {
+// 序列化 + 体积校验（供写入路径使用；超限返回 false 且不落盘）
+bool ConfigManager::seqConfigToJsonChecked(const SeqConfig& c, const String& name, String& out) {
+  out = seqConfigToJson(c, name);
+  return out.length() <= SEQ_JSON_MAX_BYTES;
+}
+
+SeqParseResult ConfigManager::seqJsonToConfig(const String& json, SeqConfig& config, String& name) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);
-  if (err) return false;
-  int ver = doc["version"] | 0;
-  if (ver != 1) return false;
+  if (err) return SEQ_PARSE_INVALID;
+
+  int ver = doc["version"] | 1;   // 缺省按 v1（旧版「导出当前」不含 version）
+  if (ver != 1 && ver != 2) return SEQ_PARSE_INVALID;
+
+  JsonArray steps = doc["steps"].as<JsonArray>();
+  if (steps.isNull()) return SEQ_PARSE_INVALID;
+  if (steps.size() > SEQ_MAX_STEPS) return SEQ_PARSE_TOO_MANY;
+
   name = doc["name"] | "顺序配置";
   config.loop = doc["loop"] | false;
   config.loopGapMs = (uint16_t)clampLong((long)(doc["loopGapMs"] | 1000), 0, 10000);
   config.stepCount = 0;
 
-  for (JsonObject obj : doc["steps"].as<JsonArray>()) {
-    if (config.stepCount >= SEQ_MAX_STEPS) break;
+  for (JsonObject obj : steps) {
     String k = obj["k"] | "";
     k.toLowerCase();                                  // 容错大写键名
-    if (k.length() > 0 && webKeyToHid(k) == 0xFF) k = "";  // 非法键名降级为暂停步骤
+    bool rk = (int)(obj["rk"] | 0) != 0;
+    if (!rk && k.length() > 0 && webKeyToHid(k) == 0xFF) k = "";  // 非法键名降级为暂停
+
     SeqStep& s = config.steps[config.stepCount];
     s.keyName = k;
     s.holdMs = (uint16_t)clampLong((long)(obj["h"] | 100), 10, 10000);
-    s.gapMs = (uint16_t)clampLong((long)(obj["g"] | 100), 10, 10000);
+    s.gapMs  = (uint16_t)clampLong((long)(obj["g"] | 100), 10, 10000);
+    s.repeat = (uint8_t)clampLong((long)(obj["r"] | 1), 1, 99);
+    s.randomKey = rk;
+    s.holdMinMs = 0; s.holdMaxMs = 0; s.gapMinMs = 0; s.gapMaxMs = 0;
+
+    if (obj["hr"].is<JsonArray>()) {
+      JsonArray hr = obj["hr"].as<JsonArray>();
+      if (hr.size() == 2) {
+        long a = clampLong((long)(hr[0] | 0), 10, 10000);
+        long b = clampLong((long)(hr[1] | 0), 10, 10000);
+        if (a > b) { long t = a; a = b; b = t; }
+        s.holdMinMs = (uint16_t)a;
+        s.holdMaxMs = (uint16_t)b;
+      }
+    }
+    if (obj["gr"].is<JsonArray>()) {
+      JsonArray gr = obj["gr"].as<JsonArray>();
+      if (gr.size() == 2) {
+        long a = clampLong((long)(gr[0] | 0), 10, 10000);
+        long b = clampLong((long)(gr[1] | 0), 10, 10000);
+        if (a > b) { long t = a; a = b; b = t; }
+        s.gapMinMs = (uint16_t)a;
+        s.gapMaxMs = (uint16_t)b;
+      }
+    }
     config.stepCount++;
   }
 
-  name = sanitizeName(name).substring(0, SLOT_NAME_MAX_LEN);
-  return config.stepCount > 0;
+  if (config.stepCount == 0) return SEQ_PARSE_INVALID;
+  name = truncateName(sanitizeName(name), SLOT_NAME_MAX_LEN);
+
+  // 解析并重新序列化后的体积校验（与落盘格式一致）
+  String out = seqConfigToJson(config, name);
+  if (out.length() > SEQ_JSON_MAX_BYTES) return SEQ_PARSE_TOO_LARGE;
+  return SEQ_PARSE_OK;
 }
 
 // ========== 全部导出 ==========
@@ -509,7 +625,9 @@ String ConfigManager::exportAllConfigs() {
       if (loadSlot(i, c, n)) {
         o["used"] = true;
         o["name"] = sanitizeName(n);
-        fillConfigObject(o["config"].to<JsonObject>(), c);
+        JsonObject co = o["config"].to<JsonObject>();
+        fillConfigObject(co, c);
+        co["name"] = sanitizeName(n);  // 名称同步写入 config，保证导出→导入往返不丢名
         continue;
       }
     }
@@ -525,7 +643,9 @@ String ConfigManager::exportAllConfigs() {
       if (loadSeqSlot(i, c, n)) {
         o["used"] = true;
         o["name"] = sanitizeName(n);
-        fillSeqConfigObject(o["config"].to<JsonObject>(), c);
+        JsonObject co = o["config"].to<JsonObject>();
+        fillSeqConfigObject(co, c);
+        co["name"] = sanitizeName(n);  // 名称同步写入 config，保证导出→导入往返不丢名
         continue;
       }
     }

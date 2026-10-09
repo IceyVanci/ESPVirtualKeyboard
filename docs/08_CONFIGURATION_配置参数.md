@@ -101,10 +101,14 @@
 ## 顺序模式
 
 ```cpp
-#define SEQ_MAX_STEPS 64
+#define SEQ_MAX_STEPS 64         // 单条顺序配置的最大步数
+#define SEQ_JSON_MAX_BYTES 3000  // 单槽 JSON 体积上限（字节）
 ```
 
-**说明**：单条顺序配置的最大步数。录制/导入超过该上限的步骤会被截断。
+**说明**：
+- `SEQ_MAX_STEPS`：单条顺序配置的最大步数。录制/导入超过该上限时**服务端拒绝（HTTP 400 `too many steps`）**，前端达到 64 步后禁止再插入；不再静默截断。
+- `SEQ_JSON_MAX_BYTES`：单槽 JSON 体积上限。解析后重新序列化超过该值的配置返回 **HTTP 413 `seq too large`**，且不会写入 NVS；前端以 `TextEncoder` 预检并实时显示体积。
+- 约束依据：ESP32 NVS 分区共 20,480B（huge_app），外加固件单值字符串上限约 4000B；3000B × 5 槽 + 自动模式槽位/凭据约 19KB，可容纳。`saveSeqSlot` 写入失败（NVS 满）会回滚「已用」标记并返回错误。
 
 ## LED 配置
 
@@ -368,10 +372,14 @@ The repo `config.h` keeps the credentials you fill in; **distribution packages a
 ## Sequence Mode
 
 ```cpp
-#define SEQ_MAX_STEPS 64
+#define SEQ_MAX_STEPS 64         // Maximum steps per sequence
+#define SEQ_JSON_MAX_BYTES 3000  // Per-slot JSON size limit (bytes)
 ```
 
-**Note**: Maximum number of steps in a single sequence config. Steps beyond this limit are truncated on record/import.
+**Notes**:
+- `SEQ_MAX_STEPS`: maximum steps in a single sequence config. Configs beyond this limit are **rejected by the server (HTTP 400 `too many steps`)**; the frontend blocks insertion after 64 steps. No silent truncation.
+- `SEQ_JSON_MAX_BYTES`: per-slot JSON size limit. A config whose re-serialized size exceeds this returns **HTTP 413 `seq too large`** and is never written to NVS; the frontend pre-checks with `TextEncoder` and shows the size live.
+- Rationale: the ESP32 NVS partition is 20,480B total (huge_app) and a single NVS string is capped around 4000B; 3000B × 5 slots plus auto slots/credentials fits in ~19KB. If `saveSeqSlot` fails (NVS full) it rolls back the "used" flag and returns an error.
 
 ## LED Configuration
 

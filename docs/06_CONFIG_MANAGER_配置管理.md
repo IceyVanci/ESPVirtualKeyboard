@@ -40,7 +40,7 @@ String slotUsedKey(int i) { return "s" + String(i) + "u"; }  // 使用标记
 bool saveSlot(int slotIndex, const String& name, const AutoModeConfig& config);
 ```
 
-1. 截断名称到 `SLOT_NAME_MAX_LEN`（20 字符）
+1. 名称经 `sanitizeName()` 消毒并按 Unicode 码点截断到 `SLOT_NAME_MAX_LEN`（20 字符）；消毒后为空时回退为「配置N」
 2. 将配置序列化为 JSON（`configToJson`）
 3. 写入 NVS：名称字符串、JSON 配置数据、使用标记 true
 4. 返回是否成功
@@ -122,14 +122,17 @@ if (configMgr.loadActiveConfig(savedConfig)) {
 String ConfigManager::configToJson(const AutoModeConfig& c, const String& name);  // serializeJson
 bool   ConfigManager::jsonToConfig(const String& json, AutoModeConfig& c, String& name);  // deserializeJson
 String ConfigManager::seqConfigToJson(const SeqConfig& c, const String& name);
-bool   ConfigManager::seqJsonToConfig(const String& json, SeqConfig& c, String& name);
+bool   ConfigManager::seqConfigToJsonChecked(const SeqConfig& c, const String& name, String& out);
+SeqParseResult ConfigManager::seqJsonToConfig(const String& json, SeqConfig& c, String& name);
 ```
 
 关键行为：
 
 - 序列化时字符串字段（`name` / 步骤 `k`）由 ArduinoJson **自动转义**，杜绝引号/控制字符破坏 JSON 结构
-- 所有名称（槽位名、序列名、BLE 名）在保存与读取时均经 **`sanitizeName()`** 消毒（仅保留可打印 ASCII，剔除 `"` `\` `<` `>` 与控制字符），防止 NVS 数据污染与 XSS
+- 所有名称（槽位名、序列名、BLE 名）在保存与读取时均经 **`sanitizeName()`** 消毒：保留可打印 ASCII 与合法 UTF-8（中文/emoji），剔除 `"` `\` `<` `>` 与控制字符、无效字节，防止 NVS 数据污染与 XSS；长度按 Unicode 码点截断（`truncateName()`，槽位名 20 字符 / BLE 名 24 字符，不会切断多字节字符）。空名兜底：「配置N」/「序列N」，保证栏位不出现空白名称
 - 顺序步骤键名解析时自动 `toLowerCase()` 容错大写；仍非法（`webKeyToHid` 返回 `0xFF`）的键名降级为**暂停步骤**（空键名），不会截断整条序列
+- 顺序配置 `version` **缺省视为 1**（兼容旧版「导出当前」文件），显式 1/2 接受，其它拒绝；输出恒为 2
+- 顺序配置步数 > `SEQ_MAX_STEPS` 返回 `SEQ_PARSE_TOO_MANY`（HTTP 400）；解析后序列化体积 > `SEQ_JSON_MAX_BYTES` 返回 `SEQ_PARSE_TOO_LARGE`（HTTP 413）
 
 ### 导入验证
 
@@ -145,7 +148,7 @@ bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, Str
     //    - maxHoldMs: [10, 5000]
     //    - 所有权重: [0, 1]
     // 5. 自动交换 min/max（如果 min > max）
-    // 6. name 经 sanitizeName 消毒并截断
+    // 6. name 经 sanitizeName 消毒并按码点截断（空名由 saveSlot 回退为「配置N」）
 }
 ```
 
@@ -206,7 +209,7 @@ bool   setBleName(const String& name);  // 写入 NVS（1~24 字符），需重�
 顺序模式有 5 个独立栏位，与自动模式槽位互不影响：
 
 ```cpp
-bool   saveSeqSlot(int slot, const String& name, const SeqConfig& config); // 保存（JSON 字符串）
+bool   saveSeqSlot(int slot, const String& name, const SeqConfig& config); // 保存（JSON 字符串；写失败回滚并返回 false）
 bool   loadSeqSlot(int slot, SeqConfig& config, String& name);             // 加载
 bool   deleteSeqSlot(int slot);                                            // 删除
 bool   isSeqSlotUsed(int slot);
@@ -214,26 +217,36 @@ String getSeqSlotName(int slot);
 void   setActiveSeqSlot(int slot);   // -1 = 默认
 int    getActiveSeqSlot();
 bool   loadActiveSeqConfig(SeqConfig& config);   // 启动时自动加载活动顺序配置
-String seqConfigToJson(const SeqConfig& config, const String& name);  // ArduinoJson 序列化
-bool   seqJsonToConfig(const String& json, SeqConfig& config, String& name);
+String seqConfigToJson(const SeqConfig& config, const String& name);                     // 纯序列化（读取/导出）
+bool   seqConfigToJsonChecked(const SeqConfig& config, const String& name, String& out); // 序列化 + 体积校验（写入路径）
+SeqParseResult seqJsonToConfig(const String& json, SeqConfig& config, String& name);
 ```
 
-顺序配置 JSON 格式（每步 `k`=按键名，空表示暂停步骤；`h`=时长 ms，`g`=间隔 ms）：
+顺序配置 JSON 格式 v2（每步 `k`=按键名，空表示暂停步骤；`h`=时长 ms，`g`=间隔 ms；`r`=重复次数；`rk`=随机键；`hr`/`gr`=随机时序 min–max）：
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "name": "我的序列",
   "loop": false,
   "loopGapMs": 1000,
   "steps": [
     {"k": "w", "h": 120, "g": 300},
-    {"k": "space", "h": 80, "g": 200}
+    {"k": "space", "h": 80, "g": 200, "r": 3},
+    {"k": "w", "h": 200, "g": 300, "rk": 1},
+    {"k": "a", "h": 100, "g": 100, "hr": [60, 180], "gr": [100, 400]}
   ]
 }
 ```
 
-解析校验：版本为 1、步数 ≤ `SEQ_MAX_STEPS`（64）、hold/gap 钳制 10~10000ms、loopGap 钳制 0~10000ms、非空键名必须可映射到有效 HID 键码。
+解析与守卫：
+
+- `version` 缺省=1，显式 1/2 接受，其它拒绝；输出恒为 2（`r==1`、`rk==0`、未启用的 `hr/gr` 省略；`k`/`h`/`g` 恒输出，`rk=1` 时保留 `k` 原文）
+- 步数 > `SEQ_MAX_STEPS`（64）→ `SEQ_PARSE_TOO_MANY`；解析后重新序列化体积 > `SEQ_JSON_MAX_BYTES`（3000B）→ `SEQ_PARSE_TOO_LARGE`
+- `hr`/`gr` 需长度 2，min>max 自动交换，值钳制 10–10000ms；`r` 钳制 1–99；hold/gap 钳制 10–10000ms；loopGap 钳制 0–10000ms
+- 非空键名必须可映射到有效 HID 键码，否则降级为暂停步骤
+
+NVS 预算：分区共 20,480B；单槽上限 3000B × 5 槽 ≈ 15KB，叠加自动模式槽位与凭据约 19KB。`saveSeqSlot` 检查 `putString` 返回值，失败时删除半截数据、回滚 `sqXu=false` 并返回 false（handler 返回 500 `storage full`）。
 
 ## 全部导出
 
@@ -247,6 +260,8 @@ bool   seqJsonToConfig(const String& json, SeqConfig& config, String& name);
   "seq":  [ {"used": true, "name": "...", "config": {...}}, ... ]
 }
 ```
+
+其中每个 `config` 内部同时写入 `name`（与条目级 `name` 一致），保证「导出 → 导入」往返不丢名称（导入时前端还会把条目级 `name` 合并进 config，兼容旧文件）。
 
 由 `GET /api/config/export-all` 下载；导入时前端解析后与设备现有栏位逐项比对（相同跳过、不同默认分配到该模式下**下一个空槽位**，可手动调整/跳过）。
 
@@ -382,7 +397,7 @@ bool   ConfigManager::seqJsonToConfig(const String& json, SeqConfig& c, String& 
 Key behaviors:
 
 - String fields (`name` / step `k`) are **auto-escaped** by ArduinoJson during serialization, preventing quotes/control characters from breaking the JSON structure
-- All names (slot names, sequence names, BLE name) pass through **`sanitizeName()`** on save and load (printable ASCII only, strips `"` `\` `<` `>` and control chars) to prevent NVS pollution and XSS
+- All names (slot names, sequence names, BLE name) pass through **`sanitizeName()`** on save and load: printable ASCII and valid UTF-8 (Chinese/emoji) are kept, while `"` `\` `<` `>`, control chars and invalid bytes are stripped, preventing NVS pollution and XSS; length is truncated by Unicode code points (`truncateName()`, 20 chars for slot names / 24 chars for BLE name, never splitting a multi-byte char). Empty names fall back to "配置N" / "序列N" so slots never show a blank name
 - Sequence step key names are lowercased on parse (`toLowerCase()`) to tolerate uppercase; keys still invalid (`webKeyToHid` returns `0xFF`) degrade to a **pause step** (empty key) instead of truncating the whole sequence
 
 ### Import Validation
@@ -399,7 +414,7 @@ bool ConfigManager::jsonToConfig(const String& json, AutoModeConfig& config, Str
     //    - maxHoldMs: [10, 5000]
     //    - All weights: [0, 1]
     // 5. Auto-swap min/max (if min > max)
-    // 6. name sanitized via sanitizeName and truncated
+    // 6. name sanitized via sanitizeName and truncated by code points (empty falls back to "配置N" in saveSlot)
 }
 ```
 
@@ -460,7 +475,7 @@ bool   setBleName(const String& name);  // Write to NVS (1-24 chars); BLE restar
 Sequence mode has 5 independent slots, separate from the auto mode slots:
 
 ```cpp
-bool   saveSeqSlot(int slot, const String& name, const SeqConfig& config); // Save (JSON string)
+bool   saveSeqSlot(int slot, const String& name, const SeqConfig& config); // Save (JSON string; rolls back on write failure)
 bool   loadSeqSlot(int slot, SeqConfig& config, String& name);             // Load
 bool   deleteSeqSlot(int slot);                                            // Delete
 bool   isSeqSlotUsed(int slot);
@@ -468,26 +483,36 @@ String getSeqSlotName(int slot);
 void   setActiveSeqSlot(int slot);   // -1 = default
 int    getActiveSeqSlot();
 bool   loadActiveSeqConfig(SeqConfig& config);   // Auto-load active seq config on startup
-String seqConfigToJson(const SeqConfig& config, const String& name);  // ArduinoJson serialization
-bool   seqJsonToConfig(const String& json, SeqConfig& config, String& name);
+String seqConfigToJson(const SeqConfig& config, const String& name);                     // Pure serialization (read/export)
+bool   seqConfigToJsonChecked(const SeqConfig& config, const String& name, String& out); // Serialize + size guard (write path)
+SeqParseResult seqJsonToConfig(const String& json, SeqConfig& config, String& name);
 ```
 
-Sequence config JSON format (each step `k`=key name, empty means a pause step; `h`=hold ms, `g`=gap ms):
+Sequence config JSON format v2 (per step: `k`=key name, empty means a pause step; `h`=hold ms, `g`=gap ms; `r`=repeat count; `rk`=random key; `hr`/`gr`=random timing min–max):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "name": "My Sequence",
   "loop": false,
   "loopGapMs": 1000,
   "steps": [
     {"k": "w", "h": 120, "g": 300},
-    {"k": "space", "h": 80, "g": 200}
+    {"k": "space", "h": 80, "g": 200, "r": 3},
+    {"k": "w", "h": 200, "g": 300, "rk": 1},
+    {"k": "a", "h": 100, "g": 100, "hr": [60, 180], "gr": [100, 400]}
   ]
 }
 ```
 
-Parse validation: version must be 1, steps ≤ `SEQ_MAX_STEPS` (64), hold/gap clamped to 10-10000ms, loopGap clamped to 0-10000ms, and non-empty key names must map to valid HID keycodes.
+Parse & guards:
+
+- `version` defaults to 1 when absent (compat with old "export current" files); explicit 1/2 accepted, others rejected; output is always 2 (`r==1`, `rk==0`, and disabled `hr`/`gr` are omitted; `k`/`h`/`g` always emitted, `k` preserved when `rk=1`)
+- More than `SEQ_MAX_STEPS` (64) steps → `SEQ_PARSE_TOO_MANY`; re-serialized size over `SEQ_JSON_MAX_BYTES` (3000B) → `SEQ_PARSE_TOO_LARGE`
+- `hr`/`gr` must have length 2; min>max is swapped; values clamped to 10–10000ms; `r` clamped to 1–99; hold/gap clamped to 10–10000ms; loopGap clamped to 0–10000ms
+- Non-empty key names must map to valid HID keycodes, otherwise they degrade to a pause step
+
+NVS budget: 20,480B total; 3000B × 5 slots ≈ 15KB plus auto slots/credentials ≈ 19KB. `saveSeqSlot` checks the `putString` return value; on failure it removes the partial data, rolls back `sqXu=false`, and returns false (handler responds 500 `storage full`).
 
 ## Export All
 
@@ -501,5 +526,7 @@ Parse validation: version must be 1, steps ≤ `SEQ_MAX_STEPS` (64), hold/gap cl
   "seq":  [ {"used": true, "name": "...", "config": {...}}, ... ]
 }
 ```
+
+Each `config` object also carries `name` (mirroring the item-level `name`) so that export → import round-trips never lose names (the frontend additionally merges the item-level `name` into the config on import, for backward compatibility with older files).
 
 Downloaded via `GET /api/config/export-all`. On import, the frontend parses the file and compares each entry with the device's existing slots (identical ones are skipped; differing ones default to the **next empty slot** for their mode, auto-advancing as items are imported — adjustable/skippable).

@@ -1,6 +1,6 @@
 esp-virtual-keyboard firmware package - empty-credential verification
-version   : 20261009
-generated : 2026-10-09 16:25:58
+version   : 20261010
+generated : 2026-10-09 23:32:52
 mode      : firmware-only
 L1 source : config.h copy rewritten to empty (empty_creds.ps1 self-check passed)
 L2 source : assertion passed (2 credential macros == empty)

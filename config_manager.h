@@ -9,6 +9,14 @@
 #define SLOT_COUNT 5
 #define SLOT_NAME_MAX_LEN 20
 
+// 顺序配置 JSON 解析结果
+enum SeqParseResult {
+  SEQ_PARSE_OK = 0,
+  SEQ_PARSE_INVALID,     // 语法/结构非法
+  SEQ_PARSE_TOO_MANY,    // 步数超过 SEQ_MAX_STEPS
+  SEQ_PARSE_TOO_LARGE    // JSON 体积超过 SEQ_JSON_MAX_BYTES
+};
+
 struct SlotSummary {
   int index;
   bool used;
@@ -47,8 +55,10 @@ public:
   String exportCurrentConfig(const AutoModeConfig& config);
   bool importToCurrentConfig(const String& json, AutoModeConfig& config);
 
-  // 名称消毒：仅保留可打印 ASCII，剔除 " \ < > 及控制字符（用于槽位名/序列名/BLE 名）
+  // 名称消毒：保留可打印 ASCII 与合法 UTF-8（中文/emoji），剔除 " \ < > 及控制字符（用于槽位名/序列名/BLE 名）
   static String sanitizeName(const String& in);
+  // 按 Unicode 码点截断名称（不会切断多字节字符）
+  static String truncateName(const String& in, unsigned int maxChars);
 
   // 认证凭据（NVS 持久化，默认值来自 config.h）
   String getAuthUser();
@@ -80,7 +90,8 @@ public:
   int  getActiveSeqSlot();
   bool loadActiveSeqConfig(SeqConfig& config);
   String seqConfigToJson(const SeqConfig& config, const String& name);
-  bool seqJsonToConfig(const String& json, SeqConfig& config, String& name);
+  bool seqConfigToJsonChecked(const SeqConfig& config, const String& name, String& out);
+  SeqParseResult seqJsonToConfig(const String& json, SeqConfig& config, String& name);
 
   // 全部导出：5 自动 + 5 顺序槽位汇总为单个 JSON
   String exportAllConfigs();

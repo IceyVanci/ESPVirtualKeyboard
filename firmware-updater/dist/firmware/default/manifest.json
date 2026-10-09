@@ -1,5 +1,5 @@
 {
-    "version":  "20261009",
+    "version":  "20261010",
     "chip":  "esp32c3",
     "credentials":  "empty",
     "flash":  {
@@ -29,8 +29,8 @@
                   {
                       "name":  "app.bin",
                       "offset":  65536,
-                      "size":  1463520,
-                      "sha256":  "e9eb7f25645c2ac25181207b3cc36741e3d975c3c0bff7243e5c4cbb3e63faf2"
+                      "size":  1479280,
+                      "sha256":  "db188aeb35783282f11ba357bdb27f109891c70f110218020da496a291322b55"
                   }
               ]
 }

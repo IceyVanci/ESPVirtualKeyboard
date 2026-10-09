@@ -19,7 +19,7 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 - **键盘独占模式**：一键切换为纯虚拟键盘视图（banner 保留），状态记忆；编译期可选默认模式
 - **移动端自适应缩放**：键盘按视口宽度自动缩放，移动设备也能完整显示
 - **自动模式**：设备具备可配置的自动按键模拟能力，支持加权随机按键分配和正态分布时间间隔
-- **顺序模式**：可录制按键序列（时长/间隔）、编辑并保存到 5 个独立栏位，支持循环播放与循环周期调整，录制时可选择是否同步发送按键
+- **顺序模式**：可录制按键序列（时长/间隔），步骤支持插入/复制/删除/上下移/置顶置底/拖拽排序，可设重复次数；每步可选随机键（复用自动模式权重）与随机时序（hold/gap 正态波动）；实时校验步骤数（64）与体积（3KB）；保存到 5 个独立栏位，支持循环播放与循环周期调整，录制时可选择是否同步发送按键
 - **一键导入/导出全部**：banner 一键导出所有模式预设，导入时自动跳过相同配置、不同配置逐个选择目标模式与栏位
 - **配置管理**：5 个持久化配置槽位（NVS），支持保存/加载/删除，JSON 导入/导出（文件名使用槽位名称）；自动模式面板支持「应用」和「保存到配置」按钮
 - **蓝牙名称修改**：Web 面板在线修改设备蓝牙名称（NVS 持久化，重启 BLE 生效）
@@ -105,7 +105,7 @@ See [docs/INDEX.md](./docs/INDEX.md) for detailed documentation.
 - **Keyboard-Only Mode**: One-click switch to a pure virtual keyboard view (banner stays); state is remembered, compile-time default selectable
 - **Mobile Auto-Scaling**: Keyboard scales to viewport width, so mobile devices show the full keyboard
 - **Auto Mode**: Configurable automatic key simulation capability with weighted random key distribution and normal distribution timing
-- **Sequence Mode**: Record key sequences (duration/interval), edit and save to 5 independent slots; supports looping with adjustable inter-loop gap, and an option to send keys while recording
+- **Sequence Mode**: Record key sequences (duration/interval); steps support insert/duplicate/delete/move up-down/top-bottom/drag reorder and a repeat count; each step can use a random key (reusing auto-mode weights) and random timing (normal-distributed hold/gap); live step (64) and size (3KB) validation; save to 5 independent slots with looping and adjustable inter-loop gap; optional send-while-recording
 - **Export/Import All**: One-click export of all mode presets from the banner; import auto-skips identical configs and lets you choose target mode+slot for each differing one
 - **Config Management**: 5 persistent config slots (NVS) with save/load/overwrite/delete and JSON import/export
 - **BLE Rename**: Change the device Bluetooth name online via the web panel (NVS persisted, takes effect after BLE restart)

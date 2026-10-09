@@ -143,7 +143,14 @@ void WebController::handleConfig() {
     j += ",\"weightSP\":" + String(c.jumpWeight,2);
     j += ",\"weightC\":" + String(c.weightC,2);
     j += ",\"weightZ\":" + String(c.weightZ,2);
-    j += ",\"weightIdle\":" + String(c.idleWeight,2) + "}";
+    j += ",\"weightIdle\":" + String(c.idleWeight,2);
+    // 当前生效配置名（活动自动栏位名；未保存到栏位时为空）
+    String cfgName = "";
+    if (_configMgr) {
+      int active = _configMgr->getActiveSlot();
+      if (active >= 0) cfgName = ConfigManager::sanitizeName(_configMgr->getSlotName(active));
+    }
+    j += ",\"name\":\"" + cfgName + "\"}";
     _server->send(200, "application/json", j);
   } else {
     if (!authGuard()) return;
@@ -584,9 +591,22 @@ void WebController::handleSeqConfig() {
     _server->send(400, "application/json", "{\"error\":\"missing json\"}");
     return;
   }
+  if (!_configMgr) {
+    _server->send(500, "application/json", "{\"error\":\"config manager not available\"}");
+    return;
+  }
   SeqConfig c;
   String name;
-  if (!_configMgr || !_configMgr->seqJsonToConfig(_server->arg("json"), c, name)) {
+  SeqParseResult r = _configMgr->seqJsonToConfig(_server->arg("json"), c, name);
+  if (r == SEQ_PARSE_TOO_MANY) {
+    _server->send(400, "application/json", "{\"error\":\"too many steps\"}");
+    return;
+  }
+  if (r == SEQ_PARSE_TOO_LARGE) {
+    _server->send(413, "application/json", "{\"error\":\"seq too large\"}");
+    return;
+  }
+  if (r != SEQ_PARSE_OK) {
     _server->send(400, "application/json", "{\"error\":\"invalid seq JSON\"}");
     return;
   }
@@ -605,6 +625,7 @@ void WebController::handleSeqPlay() {
   if (on) {
     // 互斥：开启顺序播放时停止自动模式
     _autoMode->setEnabled(false);
+    _seqMode->setRandomWeights(_autoMode->getRandomWeights()); // 快照随机键权重
     _seqMode->setPlaying(true);
   } else {
     _seqMode->setPlaying(false);
@@ -629,8 +650,14 @@ void WebController::handleSeqSlotSave() {
     _server->send(400, "application/json", "{\"error\":\"empty sequence\"}");
     return;
   }
-  if (!_configMgr->saveSeqSlot(slot, _server->arg("name"), c)) {
-    _server->send(500, "application/json", "{\"error\":\"save failed\"}");
+  String name = ConfigManager::truncateName(ConfigManager::sanitizeName(_server->arg("name")), SLOT_NAME_MAX_LEN);
+  String tmp;
+  if (!_configMgr->seqConfigToJsonChecked(c, name, tmp)) {
+    _server->send(413, "application/json", "{\"error\":\"seq too large\"}");
+    return;
+  }
+  if (!_configMgr->saveSeqSlot(slot, name, c)) {
+    _server->send(500, "application/json", "{\"error\":\"storage full\"}");
     return;
   }
   _configMgr->setActiveSeqSlot(slot);
@@ -681,11 +708,23 @@ void WebController::handleSeqSlotImport() {
   }
   SeqConfig c;
   String name;
-  if (!_configMgr->seqJsonToConfig(_server->arg("json"), c, name)) {
+  SeqParseResult r = _configMgr->seqJsonToConfig(_server->arg("json"), c, name);
+  if (r == SEQ_PARSE_TOO_MANY) {
+    _server->send(400, "application/json", "{\"error\":\"too many steps\"}");
+    return;
+  }
+  if (r == SEQ_PARSE_TOO_LARGE) {
+    _server->send(413, "application/json", "{\"error\":\"seq too large\"}");
+    return;
+  }
+  if (r != SEQ_PARSE_OK) {
     _server->send(400, "application/json", "{\"error\":\"invalid seq JSON\"}");
     return;
   }
-  _configMgr->saveSeqSlot(slot, name, c);
+  if (!_configMgr->saveSeqSlot(slot, name, c)) {
+    _server->send(500, "application/json", "{\"error\":\"storage full\"}");
+    return;
+  }
   _server->send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -747,6 +786,7 @@ const char WEB_HTML_B[] PROGMEM = R"rawliteral(
     <div class="ctrl-card" id="autoCard">
       <div class="ctrl-title" onclick="togglePanel('autoPanel')"><span id="lblAutoMode">⚙️ 自动模式</span> <span class="arrow">▾</span></div>
       <div id="autoPanel" class="ctrl-body">
+        <div class="cfg-name" id="autoCfgName"></div>
         <button id="autoBtn" class="btn btn-green" onclick="toggleAuto()">▶ 开启</button>
         <div class="sld-group">
           <div class="sld-label"><span id="lblInterval">间隔</span> <span id="ivD">800-4000</span>ms</div>
@@ -780,10 +820,11 @@ const char WEB_HTML_B[] PROGMEM = R"rawliteral(
     <div class="ctrl-card" id="seqCard" style="display:none">
       <div class="ctrl-title" onclick="togglePanel('seqPanel')"><span id="lblSeqMode">🔁 顺序模式</span> <span class="arrow">▾</span></div>
       <div id="seqPanel" class="ctrl-body">
+        <div class="cfg-name" id="seqCfgName"></div>
         <div class="seq-status" id="seqStatus">空闲</div>
         <div class="btn-row">
           <button class="btn btn-green btn-half" onclick="seqRecToggle()" id="seqRecBtn">▶ 开始录制</button>
-          <button class="btn btn-blue btn-half" onclick="seqPlay()" id="seqPlayBtn">▶ 播放</button>
+          <button class="btn btn-blue btn-half" onclick="seqPlayToggle()" id="seqPlayBtn">▶ 播放</button>
         </div>
         <div class="seq-opts">
           <label class="seq-chk"><input type="checkbox" id="seqLoop" onchange="seqUiChanged()"><span id="lblSeqLoop">🔁 循环</span></label>
@@ -791,8 +832,13 @@ const char WEB_HTML_B[] PROGMEM = R"rawliteral(
           <label class="seq-chk"><span id="lblSeqLoopGap">循环周期</span><input type="number" id="seqLoopGap" min="0" max="10000" value="1000" style="width:64px" onchange="seqUiChanged()">ms</label>
         </div>
         <div class="seq-toolbar">
-          <span class="seq-tb-label"><span id="lblSeqSteps">步骤</span> <span id="seqStepCount">0</span></span>
-          <button class="btn btn-warn btn-sm" onclick="seqInsert()" id="btnSeqInsert">➕ 插入</button>
+          <span class="seq-tb-label"><span id="lblSeqSteps">步骤</span> <span id="seqStepCount">0</span>/64
+            <span class="seq-bytes" id="seqBytes">0.0/3.0KB</span></span>
+          <span class="seq-tb-btns">
+            <button class="btn btn-warn btn-sm" onclick="seqInsert()" id="btnSeqInsert">➕ 插入</button>
+            <button class="btn btn-sm" onclick="seqMoveTop(seqSelIdx)" id="btnSeqTop">⤒ 置顶</button>
+            <button class="btn btn-sm" onclick="seqMoveBottom(seqSelIdx)" id="btnSeqBottom">⤓ 置底</button>
+          </span>
         </div>
         <div id="seqStepsBox" class="seq-steps"><div class="slot-empty" id="lblSeqEmpty">暂无步骤，点击开始录制</div></div>
         <div class="btn-row">
@@ -1236,6 +1282,8 @@ body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
 .modal-input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--key-bg);color:var(--text);margin-bottom:8px;font-size:0.85em}
 .modal-input:focus{outline:none;border-color:var(--accent)}
 .seq-status{padding:6px 10px;font-size:0.85em;color:var(--accent);font-weight:600;background:rgba(88,166,255,0.08);border-radius:8px;margin:8px 0;text-align:center}
+.cfg-name{font-size:0.82em;color:var(--dim);text-align:center;margin:2px 0 6px;word-break:break-all}
+.cfg-name:empty{display:none}
 .seq-opts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0;font-size:0.78em;color:var(--dim)}
 .seq-chk{display:inline-flex;align-items:center;gap:4px}
 .seq-chk input[type=number]{accent-color:var(--accent);background:var(--key-bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:2px 4px}
@@ -1250,6 +1298,15 @@ body.kb-mode .ctrl-grid,body.kb-mode .log-stats-grid{display:none}
 .seq-mini{background:var(--key-bg);border:1px solid var(--border);color:var(--text);border-radius:6px;width:24px;height:22px;font-size:0.7em;cursor:pointer;flex-shrink:0}
 .seq-mini:hover{background:var(--key-h)}
 .seq-mini.seq-del{color:var(--red)}
+.seq-row.sel{background:rgba(88,166,255,0.12);border-radius:6px}
+.seq-drag{cursor:grab;color:var(--dim);font-size:0.8em;padding:0 2px;flex-shrink:0}
+.seq-key:disabled{opacity:0.5}
+.seq-mini.on{color:var(--accent);border-color:var(--accent)}
+.seq-t2{width:50px}
+.seq-r{width:40px}
+.seq-bytes{font-size:0.9em;color:var(--dim);margin-left:4px}
+.seq-bytes.over{color:var(--red)}
+.seq-tb-btns{display:flex;gap:4px}
 .footer{max-width:1200px;margin:12px auto 0;padding:10px 12px;font-size:0.72em;color:var(--dim);text-align:center;border-top:1px solid var(--border)}
 @media(max-width:768px){
   .ctrl-grid,.log-stats-grid{grid-template-columns:1fr}
@@ -1337,7 +1394,8 @@ function getCfgBody(){
   return ['minInterval='+document.getElementById('iv1').value,'maxInterval='+document.getElementById('iv2').value,'minHold='+document.getElementById('hd1').value,'maxHold='+document.getElementById('hd2').value,'weightW='+(parseInt(document.getElementById('wW').value)/100).toFixed(2),'weightS='+(parseInt(document.getElementById('wS').value)/100).toFixed(2),'weightA='+(parseInt(document.getElementById('wA').value)/100).toFixed(2),'weightD='+(parseInt(document.getElementById('wD').value)/100).toFixed(2),'weightTL='+(parseInt(document.getElementById('wTL').value)/100).toFixed(2),'weightTR='+(parseInt(document.getElementById('wTR').value)/100).toFixed(2),'weightSP='+(parseInt(document.getElementById('wSP').value)/100).toFixed(2),'weightC='+(parseInt(document.getElementById('wC').value)/100).toFixed(2),'weightZ='+(parseInt(document.getElementById('wZ').value)/100).toFixed(2),'weightIdle='+(parseInt(document.getElementById('wId').value)/100).toFixed(2)].join('&');
 }
 function applyCfg(){
-  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:getCfgBody()}).then(function(r){return r.json()}).then(function(d){if(d.ok)alert('已应用！')});
+  window._autoImpName='';
+  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:getCfgBody()}).then(function(r){return r.json()}).then(function(d){if(d.ok){alert('已应用！');loadCfg();}});
 }
 function saveToSlot(mode){
   window._slotSaveMode=mode||'auto';
@@ -1367,19 +1425,23 @@ function confirmSlotSave(idx,isOverride){
   closeSlotModal();
   var mode=window._slotSaveMode==='seq'?'seq':'auto';
   var slots=window._slotModalData?window._slotModalData.slots:[];
-  var defaultName=slots[idx]&&slots[idx].used?slots[idx].name:L('configN')+(idx+1);
+  var defaultName=slots[idx]&&slots[idx].used?slots[idx].name:((mode==='seq'&&seqData.name)?seqData.name:L('configN')+(idx+1));
   var name=isOverride?defaultName:prompt(L('enterName'),defaultName);
   if(name===null)return;
   if(!name.trim())name=defaultName;
   var applyPromise;
   if(mode==='seq'){
-    seqUiChanged();
-    applyPromise=fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(JSON.stringify(seqData))});
+    if(!seqValidate())return;
+    applyPromise=fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(seqPayload())});
   }else{
     applyPromise=fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:getCfgBody()});
   }
   applyPromise.then(function(){return fetch(mode==='seq'?'/api/seq/slot/save':'/api/slot/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+idx+'&name='+encodeURIComponent(name.trim())})}).then(function(r){return r.json()}).then(function(d){
-    if(d.ok){loadSlots();alert(mode==='seq'?L('seqSavedTo')+(idx+1):L('saved').replace('%d',idx+1));}else{alert(d.error||L('saveFail'));}
+    if(d.ok){
+      if(mode==='seq'){seqData.name=name.trim();updSeqStatus();}
+      loadSlots();
+      alert(mode==='seq'?L('seqSavedTo')+(idx+1):L('saved').replace('%d',idx+1));
+    }else{alert(d.error||L('saveFail'));}
   });
 }
 
@@ -1427,6 +1489,8 @@ function loadCfg(){
     document.getElementById('wZ').value=Math.round(d.weightZ*100);
     document.getElementById('wId').value=Math.round(d.weightIdle*100);
     updSld();updWt();
+    var ne=document.getElementById('autoCfgName');
+    if(ne){var nm=d.name||window._autoImpName||'';ne.textContent=nm?('📄 '+nm):'';}
   });
 }
 
@@ -1613,8 +1677,67 @@ var seqRec=false;
 var seqRecSend=true;
 var seqRecDown=0;
 var seqRecLast=0;
+var seqSelIdx=-1;
+var seqDragIdx=-1;
+var SEQ_MAX=64;
+var SEQ_MAX_BYTES=3000;
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// 完整键名白名单（与 keymap.cpp webKeyToHid 一致，含修饰键与别名）
+var SEQ_KEYS=('lctrl,rctrl,lshift,shift,rshift,lalt,ralt,lwin,lmeta,lcmd,rwin,rmeta,'+
+'a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,'+
+'0,1,2,3,4,5,6,7,8,9,'+
+'enter,esc,backspace,tab,space,minus,equal,lbracket,rbracket,backslash,semicolon,apostrophe,grave,comma,period,slash,capslock,'+
+'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,'+
+'up,down,left,right,insert,home,pageup,delete,end,pagedown,numlock,'+
+'numpad0,numpad1,numpad2,numpad3,numpad4,numpad5,numpad6,numpad7,numpad8,numpad9,numpadadd,numpadsub,numpadmul,numpaddiv,numpaddot,numpadenter').split(',');
+
+function clampT(v){var n=parseInt(v,10);if(isNaN(n))n=100;return Math.max(10,Math.min(10000,n));}
+function numVal(v,d){var n=parseInt(v,10);if(isNaN(n))n=d;return n;}
+
+// 统一构造 v2 载荷（应用/播放/保存栏位/导出必须全部走此函数）
+function seqPayload(){
+  seqUiChanged();
+  var out={version:2,name:seqData.name||'',loop:!!seqData.loop,loopGapMs:seqData.loopGapMs||0,steps:[]};
+  for(var i=0;i<seqData.steps.length;i++){
+    var s=seqData.steps[i]||{};
+    var o={k:s.k||'',h:clampT(s.h),g:clampT(s.g)};
+    var r=parseInt(s.r,10);if(!isNaN(r)&&r>1)o.r=Math.max(1,Math.min(99,r));
+    if(s.rk)o.rk=1;
+    if(s.hr&&s.hr.length===2)o.hr=[clampT(s.hr[0]),clampT(s.hr[1])];
+    if(s.gr&&s.gr.length===2)o.gr=[clampT(s.gr[0]),clampT(s.gr[1])];
+    out.steps.push(o);
+  }
+  return JSON.stringify(out);
+}
+function seqBytes(){
+  var str=seqPayload();
+  try{return new TextEncoder().encode(str).length;}catch(e){return str.length;}
+}
+function updSeqBytes(){
+  var el=document.getElementById('seqBytes');if(!el)return;
+  var n=seqBytes();
+  el.textContent=(n/1024).toFixed(1)+'/3.0KB';
+  el.className='seq-bytes'+(n>SEQ_MAX_BYTES?' over':'');
+}
+function seqErrMsg(d){
+  if(d&&d.error==='too many steps')return L('seqTooManySteps');
+  if(d&&d.error==='seq too large')return L('seqTooLarge');
+  if(d&&d.error==='storage full')return L('seqNvsFull');
+  return L('seqInvalid');
+}
+function seqValidate(){
+  var s=seqData.steps;
+  if(s.length>SEQ_MAX){alert(L('seqLimitReached'));return false;}
+  for(var i=0;i<s.length;i++){
+    if(s[i].rk)continue;
+    var k=(s[i].k||'').toLowerCase();
+    if(k.length>0&&SEQ_KEYS.indexOf(k)<0){alert(L('seqInvalidKey')+': '+k);return false;}
+  }
+  if(seqBytes()>SEQ_MAX_BYTES){alert(L('seqTooLarge'));return false;}
+  return true;
+}
 
 function seqRecPress(key){
   var now=performance.now();
@@ -1637,7 +1760,9 @@ function seqRecToggle(){
 }
 function seqRecStart(){
   if(seqData.steps.length>0&&!confirm(L('seqClearConfirm')))return;
+  if(seqPlaying)seqStop();
   seqData.steps=[];
+  seqSelIdx=-1;
   seqRec=true;seqRecDown=0;seqRecLast=0;
   var b=document.getElementById('seqRecBtn');
   b.textContent='⏹ '+L('seqRecordStop');b.className='btn btn-red btn-half';
@@ -1659,56 +1784,149 @@ function seqUiChanged(){
   seqData.loopGapMs=Math.max(0,Math.min(10000,g));
 }
 function seqApply(){
-  seqUiChanged();
-  return fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(JSON.stringify(seqData))}).then(function(r){return r.json()}).then(function(d){
+  if(!seqValidate())return Promise.resolve({ok:false});
+  return fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(seqPayload())}).then(function(r){return r.json()}).then(function(d){
     if(d.ok){alert(L('applied'));return d;}
-    alert(L('seqInvalid'));return d;
+    alert(seqErrMsg(d));return d;
   }).catch(function(){});
 }
 function seqPlay(){
   if(seqData.steps.length===0){alert(L('seqNoSteps'));return;}
-  seqUiChanged();
-  fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(JSON.stringify(seqData))}).then(function(){
+  if(!seqValidate())return;
+  fetch('/api/seq/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(seqPayload())}).then(function(r){return r.json()}).then(function(d){
+    if(!d||!d.ok){alert(seqErrMsg(d));return;}
     return fetch('/api/seq/play',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'state=on'});
   }).then(function(){updStatus();});
+}
+function seqPlayToggle(){
+  if(seqPlaying)seqStop();
+  else seqPlay();
 }
 function seqStop(){
   fetch('/api/seq/play',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'state=off'}).then(function(){updStatus();});
 }
-function seqInsert(){
-  seqData.steps.push({k:'',h:100,g:100});
+function seqInsertAt(i){
+  if(seqData.steps.length>=SEQ_MAX){alert(L('seqLimitReached'));return;}
+  var step={k:'',h:100,g:100};
+  if(i<0||i>=seqData.steps.length){seqData.steps.push(step);seqSelIdx=seqData.steps.length-1;}
+  else{seqData.steps.splice(i,0,step);seqSelIdx=i;}
   renderSeqSteps();
 }
-function seqStepField(i,f,v){
-  if(i>=seqData.steps.length)return;
-  if(f==='h'||f==='g'){var n=parseInt(v,10);if(isNaN(n))n=100;seqData.steps[i][f]=Math.max(10,Math.min(10000,n));}
-  else{seqData.steps[i].k=v;}
+function seqInsert(){seqInsertAt(seqSelIdx);}
+function seqDuplicate(i){
+  if(i<0||i>=seqData.steps.length)return;
+  if(seqData.steps.length>=SEQ_MAX){alert(L('seqLimitReached'));return;}
+  var c=JSON.parse(JSON.stringify(seqData.steps[i]));
+  seqData.steps.splice(i+1,0,c);seqSelIdx=i+1;renderSeqSteps();
+}
+function seqMoveTop(i){
+  if(i<0||i>=seqData.steps.length||i===0)return;
+  var t=seqData.steps.splice(i,1)[0];
+  seqData.steps.unshift(t);seqSelIdx=0;renderSeqSteps();
+}
+function seqMoveBottom(i){
+  if(i<0||i>=seqData.steps.length||i===seqData.steps.length-1)return;
+  var t=seqData.steps.splice(i,1)[0];
+  seqData.steps.push(t);seqSelIdx=seqData.steps.length-1;renderSeqSteps();
 }
 function seqMove(i,d){
   var s=seqData.steps;var j=i+d;
-  if(j<0||j>=s.length)return;
-  var t=s[i];s[i]=s[j];s[j]=t;renderSeqSteps();
+  if(i<0||i>=s.length||j<0||j>=s.length)return;
+  var t=s[i];s[i]=s[j];s[j]=t;
+  if(seqSelIdx===i)seqSelIdx=j;else if(seqSelIdx===j)seqSelIdx=i;
+  renderSeqSteps();
 }
-function seqDel(i){seqData.steps.splice(i,1);renderSeqSteps();}
+function seqDel(i){
+  if(i<0||i>=seqData.steps.length)return;
+  seqData.steps.splice(i,1);
+  if(seqSelIdx>=seqData.steps.length)seqSelIdx=seqData.steps.length-1;
+  renderSeqSteps();
+}
+function seqSetSel(i){
+  if(seqSelIdx===i)return;
+  seqSelIdx=i;
+  var rows=document.querySelectorAll('#seqStepsBox .seq-row');
+  for(var j=0;j<rows.length;j++){rows[j].classList.toggle('sel',j===i);}
+}
+function seqDragStart(e,i){
+  seqDragIdx=i;
+  try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(i));}catch(err){}
+}
+function seqDragOver(e){e.preventDefault();try{e.dataTransfer.dropEffect='move';}catch(err){}}
+function seqDragEnd(){seqDragIdx=-1;}
+function seqDrop(e,i){
+  e.preventDefault();
+  if(seqDragIdx<0||seqDragIdx===i){seqDragIdx=-1;return;}
+  var t=seqData.steps.splice(seqDragIdx,1)[0];
+  var j=i>seqDragIdx?i-1:i;
+  seqData.steps.splice(j,0,t);
+  seqSelIdx=j;seqDragIdx=-1;renderSeqSteps();
+}
+function seqStepField(i,f,v){
+  if(i>=seqData.steps.length)return;
+  if(f==='h'||f==='g'){seqData.steps[i][f]=clampT(v);}
+  else if(f==='r'){seqData.steps[i].r=Math.max(1,Math.min(99,numVal(v,1)));}
+  else{seqData.steps[i].k=v;}
+  updSeqBytes();
+}
+function seqRangeField(i,key,idx,v){
+  var s=seqData.steps[i];if(!s||!s[key])return;
+  s[key][idx]=clampT(v);
+  if(idx===0&&s[key][0]>s[key][1])s[key][1]=s[key][0];
+  if(idx===1&&s[key][1]<s[key][0])s[key][0]=s[key][1];
+  updSeqBytes();
+}
+function seqToggleRandKey(i){
+  var s=seqData.steps[i];if(!s)return;
+  s.rk=s.rk?0:1;
+  renderSeqSteps();
+}
+function seqToggleRandTiming(i){
+  var s=seqData.steps[i];if(!s)return;
+  if(s.hr||s.gr){delete s.hr;delete s.gr;}
+  else{s.hr=[clampT(s.h),clampT(s.h)];s.gr=[clampT(s.g),clampT(s.g)];}
+  renderSeqSteps();
+}
 function renderSeqSteps(){
   var box=document.getElementById('seqStepsBox');
   var s=seqData.steps;
   var c=document.getElementById('seqStepCount');
   if(c)c.textContent=s.length;
   if(!box)return;
-  if(s.length===0){box.innerHTML='<div class="slot-empty">'+L('seqEmpty')+'</div>';return;}
+  if(s.length===0){box.innerHTML='<div class="slot-empty">'+L('seqEmpty')+'</div>';updSeqBytes();return;}
   var html='';
   for(var i=0;i<s.length;i++){
-    html+='<div class="seq-row">'
-      +'<input class="seq-key" value="'+esc(s[i].k)+'" placeholder="'+L('seqKey')+'" oninput="seqStepField('+i+',\'k\',this.value)">'
-      +'<input class="seq-t" type="number" min="10" max="10000" value="'+s[i].h+'" title="'+L('seqHold')+'" oninput="seqStepField('+i+',\'h\',this.value)">'
-      +'<input class="seq-t" type="number" min="10" max="10000" value="'+s[i].g+'" title="'+L('seqGap')+'" oninput="seqStepField('+i+',\'g\',this.value)">'
-      +'<button class="seq-mini" onclick="seqMove('+i+',-1)">↑</button>'
-      +'<button class="seq-mini" onclick="seqMove('+i+',1)">↓</button>'
-      +'<button class="seq-mini seq-del" onclick="seqDel('+i+')">✕</button>'
+    var st=s[i];
+    var sel=(i===seqSelIdx)?' sel':'';
+    html+='<div class="seq-row'+sel+'" draggable="true" onclick="seqSetSel('+i+')"'
+      +' ondragstart="seqDragStart(event,'+i+')" ondragover="seqDragOver(event)" ondrop="seqDrop(event,'+i+')" ondragend="seqDragEnd()">'
+      +'<span class="seq-drag" title="'+L('seqDragHint')+'">⠿</span>'
+      +'<input class="seq-key" value="'+esc(st.k||'')+'" placeholder="'+L('seqKey')+'"'+(st.rk?' disabled':'')+' oninput="seqStepField('+i+',\'k\',this.value)">'
+      +'<button class="seq-mini'+(st.rk?' on':'')+'" title="'+L('seqRandKey')+'" onclick="event.stopPropagation();seqToggleRandKey('+i+')">🎲</button>';
+    if(st.hr&&st.hr.length===2){
+      html+='<input class="seq-t seq-t2" type="number" min="10" max="10000" value="'+clampT(st.hr[0])+'" title="'+L('seqMin')+'" oninput="seqRangeField('+i+',\'hr\',0,this.value)">'
+        +'<input class="seq-t seq-t2" type="number" min="10" max="10000" value="'+clampT(st.hr[1])+'" title="'+L('seqMax')+'" oninput="seqRangeField('+i+',\'hr\',1,this.value)">';
+    }else{
+      html+='<input class="seq-t" type="number" min="10" max="10000" value="'+clampT(st.h)+'" title="'+L('seqHold')+'" oninput="seqStepField('+i+',\'h\',this.value)">';
+    }
+    if(st.gr&&st.gr.length===2){
+      html+='<input class="seq-t seq-t2" type="number" min="10" max="10000" value="'+clampT(st.gr[0])+'" title="'+L('seqMin')+'" oninput="seqRangeField('+i+',\'gr\',0,this.value)">'
+        +'<input class="seq-t seq-t2" type="number" min="10" max="10000" value="'+clampT(st.gr[1])+'" title="'+L('seqMax')+'" oninput="seqRangeField('+i+',\'gr\',1,this.value)">';
+    }else{
+      html+='<input class="seq-t" type="number" min="10" max="10000" value="'+clampT(st.g)+'" title="'+L('seqGap')+'" oninput="seqStepField('+i+',\'g\',this.value)">';
+    }
+    html+='<button class="seq-mini'+(st.hr||st.gr?' on':'')+'" title="'+L('seqRandTiming')+'" onclick="event.stopPropagation();seqToggleRandTiming('+i+')">≈</button>'
+      +'<input class="seq-r" type="number" min="1" max="99" value="'+numVal(st.r,1)+'" title="'+L('seqRepeat')+'" oninput="seqStepField('+i+',\'r\',this.value)">'
+      +'<button class="seq-mini" title="'+L('seqTop')+'" onclick="event.stopPropagation();seqMoveTop('+i+')">⤒</button>'
+      +'<button class="seq-mini" title="'+L('seqBottom')+'" onclick="event.stopPropagation();seqMoveBottom('+i+')">⤓</button>'
+      +'<button class="seq-mini" onclick="event.stopPropagation();seqMove('+i+',-1)">↑</button>'
+      +'<button class="seq-mini" onclick="event.stopPropagation();seqMove('+i+',1)">↓</button>'
+      +'<button class="seq-mini" title="'+L('seqDup')+'" onclick="event.stopPropagation();seqDuplicate('+i+')">⧉</button>'
+      +'<button class="seq-mini seq-del" onclick="event.stopPropagation();seqDel('+i+')">✕</button>'
       +'</div>';
   }
   box.innerHTML=html;
+  updSeqBytes();
 }
 function updSeqStatus(){
   var el=document.getElementById('seqStatus');
@@ -1720,14 +1938,25 @@ function updSeqStatus(){
   if(pb){pb.textContent=seqPlaying?'⏹ '+L('seqStop'):'▶ '+L('seqPlay');pb.className=seqPlaying?'btn btn-red btn-half':'btn btn-blue btn-half';}
   var rb=document.getElementById('seqRecBtn');
   if(rb){rb.textContent=seqRec?('⏹ '+L('seqRecordStop')):('▶ '+L('seqRecordStart'));rb.className=seqRec?'btn btn-red btn-half':'btn btn-green btn-half';}
+  var ne=document.getElementById('seqCfgName');
+  if(ne)ne.textContent=seqData.name?('📄 '+seqData.name):'';
 }
 function loadSeqCfg(){
   fetch('/api/seq/config').then(function(r){return r.json()}).then(function(d){
     if(d&&d.steps){
       seqData={name:d.name||'',loop:!!d.loop,loopGapMs:d.loopGapMs||1000,steps:d.steps||[]};
+      for(var i=0;i<seqData.steps.length;i++){
+        var s=seqData.steps[i];
+        s.h=clampT(s.h);s.g=clampT(s.g);
+        if(s.r!==undefined)s.r=Math.max(1,Math.min(99,numVal(s.r,1)));
+        if(s.hr&&s.hr.length===2){s.hr[0]=clampT(s.hr[0]);s.hr[1]=clampT(s.hr[1]);}
+        if(s.gr&&s.gr.length===2){s.gr[0]=clampT(s.gr[0]);s.gr[1]=clampT(s.gr[1]);}
+      }
+      seqSelIdx=-1;
       document.getElementById('seqLoop').checked=seqData.loop;
       document.getElementById('seqLoopGap').value=seqData.loopGapMs;
       renderSeqSteps();
+      updSeqStatus();
     }
   }).catch(function(){});
 }
@@ -1800,20 +2029,31 @@ function impShow(){
 }
 function impNext(doImport){
   var it=window._impItems[window._impIdx];
-  if(doImport){
-    var mode=document.getElementById('impMode').value;
-    var slot=parseInt(document.getElementById('impSlot').value,10);
-    if(!window._impUsed[mode])window._impUsed[mode]=[];
-    window._impUsed[mode].push(slot);
-    var url=(mode==='auto'?'/api/slot/import':'/api/seq/slot/import');
-    fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+slot+'&json='+encodeURIComponent(JSON.stringify(it.config))}).catch(function(){});
-  }
-  window._impIdx++;
-  if(window._impIdx>=window._impItems.length){
-    document.getElementById('importModal').style.display='none';
-    alert(L('impDone'));
-    loadSlots();
-  }else{impShow();}
+  var done=function(){
+    window._impIdx++;
+    if(window._impIdx>=window._impItems.length){
+      document.getElementById('importModal').style.display='none';
+      var f=window._impFail||0;
+      window._impFail=0;
+      if(f>0)alert(L('seqImportPartial').replace('%d',f));
+      else alert(L('impDone'));
+      loadSlots();
+    }else{impShow();}
+  };
+  if(!doImport){done();return;}
+  var mode=document.getElementById('impMode').value;
+  var slot=parseInt(document.getElementById('impSlot').value,10);
+  if(!window._impUsed[mode])window._impUsed[mode]=[];
+  window._impUsed[mode].push(slot);
+  var url=(mode==='auto'?'/api/slot/import':'/api/seq/slot/import');
+  // 合并条目级名称进 config（兼容 name 只在条目级的旧导出文件；config 内已有 name 时以条目名为准）
+  var cfg={};
+  if(it.config){for(var k in it.config){if(Object.prototype.hasOwnProperty.call(it.config,k))cfg[k]=it.config[k];}}
+  if(it.name)cfg.name=it.name;
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'slot='+slot+'&json='+encodeURIComponent(JSON.stringify(cfg))}).then(function(r){return r.json()}).then(function(d){
+    if(!d||!d.ok)window._impFail=(window._impFail||0)+1;
+    done();
+  }).catch(function(){window._impFail=(window._impFail||0)+1;done();});
 }
 
 // ---- 配置槽位管理 ----
@@ -1908,8 +2148,8 @@ function slotImportFile(idx,input){
 
 function exportCurrent(){
   if(isSeqMode()){
-    seqUiChanged();
-    var blob=new Blob([JSON.stringify(seqData)],{type:'application/json'});
+    if(!seqValidate())return;
+    var blob=new Blob([seqPayload()],{type:'application/json'});
     var a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
     a.download=(seqData.name||'seq')+'.json';
@@ -1933,14 +2173,29 @@ function importCurrent(input){
     if(isSeqMode()){
       var parsed;
       try{parsed=JSON.parse(json);}catch(err){alert(L('impInvalid'));return;}
-      if(!parsed||!parsed.steps){alert(L('impInvalid'));return;}
+      if(!parsed||!parsed.steps||!parsed.steps.length){alert(L('impInvalid'));return;}
+      if(parsed.version!==undefined&&parsed.version!==1&&parsed.version!==2){alert(L('seqInvalid'));return;}
+      if(parsed.steps.length>SEQ_MAX){alert(L('seqTooManySteps'));return;}
       seqData={name:parsed.name||'',loop:!!parsed.loop,loopGapMs:parsed.loopGapMs||1000,steps:parsed.steps||[]};
+      for(var i=0;i<seqData.steps.length;i++){
+        var s=seqData.steps[i];
+        s.h=clampT(s.h);s.g=clampT(s.g);
+        if(s.r!==undefined)s.r=Math.max(1,Math.min(99,numVal(s.r,1)));
+        if(s.hr&&s.hr.length===2){s.hr[0]=clampT(s.hr[0]);s.hr[1]=clampT(s.hr[1]);}
+        if(s.gr&&s.gr.length===2){s.gr[0]=clampT(s.gr[0]);s.gr[1]=clampT(s.gr[1]);}
+      }
+      seqSelIdx=-1;
       document.getElementById('seqLoop').checked=seqData.loop;
       document.getElementById('seqLoopGap').value=seqData.loopGapMs;
       renderSeqSteps();
+      updSeqStatus();
       seqApply();
       return;
     }
+    // 记住导入文件中的名称，导入当前（未存入栏位）时面板仍显示
+    var autoName='';
+    try{var p=JSON.parse(json);if(p&&p.name)autoName=p.name;}catch(err){}
+    window._autoImpName=autoName;
     fetch('/api/config/import',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'json='+encodeURIComponent(json)}).then(function(r){return r.json()}).then(function(d){
       if(d.ok){loadCfg();loadSlots();updSld();updWt();alert(L('imported'));}else{alert(d.error||L('importFail'));}
     });
@@ -1986,6 +2241,11 @@ var i18n={
       seqInvalid:'顺序配置无效',seqSavedTo:'已保存到顺序栏位',seqRecOn:'录制中',
       seqPlayingNow:'播放中',seqIdleNow:'空闲',seqSaveTo:'💾 保存到栏位',
       seqSaveToTitle:'💾 保存到顺序栏位',seqSaveToSub:'选择目标栏位：',
+      seqRepeat:'重复',seqRandKey:'随机键',seqRandKeyHint:'使用随机模式权重',seqRandTiming:'随机时序',
+      seqMin:'最小',seqMax:'最大',seqDup:'复制',seqTop:'置顶',seqBottom:'置底',
+      seqDragHint:'拖拽排序（移动端请用 ↑↓）',seqLimitReached:'已达 64 步上限',
+      seqTooLarge:'配置过大，请减少步骤或随机范围字段',seqTooManySteps:'步骤数超过 64',seqInvalidKey:'无效键名',
+      seqBytes:'体积',seqNvsFull:'设备存储不足',seqImportPartial:'部分导入失败：%d 项',
       overwriteCur:'覆盖当前',slotN:'槽位',configN:'配置',
       saveFail:'保存失败',loadFail:'加载失败',delFail:'删除失败',importFail:'导入失败',noSlot:'无可用槽位',
       impTitle:'导入配置',impSub:'逐项选择导入目标',impImport:'导入',impSkip:'跳过',
@@ -2021,6 +2281,11 @@ var i18n={
       seqInvalid:'Invalid sequence',seqSavedTo:'Saved to seq slot',seqRecOn:'Recording',
       seqPlayingNow:'Playing',seqIdleNow:'Idle',seqSaveTo:'💾 Save to Slot',
       seqSaveToTitle:'💾 Save to Sequence Slot',seqSaveToSub:'Select target slot:',
+      seqRepeat:'Repeat',seqRandKey:'Random key',seqRandKeyHint:'Uses auto-mode weights',seqRandTiming:'Random timing',
+      seqMin:'Min',seqMax:'Max',seqDup:'Duplicate',seqTop:'Top',seqBottom:'Bottom',
+      seqDragHint:'Drag to reorder (use ↑↓ on touch)',seqLimitReached:'64-step limit reached',
+      seqTooLarge:'Config too large; reduce steps or random ranges',seqTooManySteps:'More than 64 steps',seqInvalidKey:'Invalid key',
+      seqBytes:'Size',seqNvsFull:'Device storage full',seqImportPartial:'%d item(s) failed to import',
       overwriteCur:'Overwrite current',slotN:'Slot',configN:'Config',
       saveFail:'Save failed',loadFail:'Load failed',delFail:'Delete failed',importFail:'Import failed',noSlot:'No slots',
       impTitle:'Import Configs',impSub:'Choose targets one by one',impImport:'Import',impSkip:'Skip',

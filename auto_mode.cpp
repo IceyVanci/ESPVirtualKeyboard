@@ -1,12 +1,10 @@
 #include "auto_mode.h"
 #include "ble_keyboard.h"
-#include <esp_system.h>
 
 AutoMode::AutoMode(BleKeyboard* keyboard)
   : _keyboard(keyboard), _state(AUTO_IDLE), _lastActionTime(0),
     _nextInterval(0), _currentHoldTime(0), _currentKey(0),
     _eventWritePos(0), _eventCounter(0), _totalCount(0) {
-  randomSeed(esp_random()); // 使用硬件随机源初始化随机数种子
   memset(_keyCounts, 0, sizeof(_keyCounts));
 }
 
@@ -70,6 +68,22 @@ AutoModeConfig AutoMode::getConfig() {
   return _config;
 }
 
+RandomKeyWeights AutoMode::getRandomWeights() {
+  RandomKeyWeights w = {{
+    _config.moveForwardWeight,  // 0: W
+    _config.moveBackWeight,     // 1: S
+    _config.moveLeftWeight,     // 2: A
+    _config.moveRightWeight,    // 3: D
+    _config.turnLeftWeight,     // 4: Left Arrow
+    _config.turnRightWeight,    // 5: Right Arrow
+    _config.jumpWeight,         // 6: Space
+    _config.weightC,            // 7: C
+    _config.weightZ,            // 8: Z
+    _config.idleWeight          // 9: Idle (no key)
+  }};
+  return w;
+}
+
 void AutoMode::setEnabled(bool enabled) {
   _config.enabled = enabled;
   if (!enabled) {
@@ -79,7 +93,7 @@ void AutoMode::setEnabled(bool enabled) {
     Serial.println("[Auto] 自动模式已关闭");
   } else {
     _lastActionTime = millis();
-    _nextInterval = getRandomInterval();
+    _nextInterval = gaussianInRange(_config.minIntervalMs, _config.maxIntervalMs);
     Serial.println("[Auto] 自动模式已开启");
   }
 }
@@ -99,19 +113,19 @@ void AutoMode::update() {
     case AUTO_IDLE:
       // 等待间隔时间到达后开始下一次按键
       if (now - _lastActionTime >= _nextInterval) {
-        _currentKey = selectRandomKey();
+        _currentKey = pickWeightedHidKey(getRandomWeights());
 
         if (_currentKey == 0) {
           // 选择了空闲，直接跳到等待下一轮
           _lastActionTime = now;
-          _nextInterval = getRandomInterval();
+          _nextInterval = gaussianInRange(_config.minIntervalMs, _config.maxIntervalMs);
           Serial.println("[Auto] 空闲等待");
         } else {
           // 按下按键
           _state = AUTO_PRESSING;
           _keyboard->press(_currentKey);
           logKeyEvent(getCurrentKeyName(), true);
-          _currentHoldTime = getRandomHoldTime();
+          _currentHoldTime = gaussianInRange(_config.minHoldMs, _config.maxHoldMs);
           _lastActionTime = now;
           Serial.print("[Auto] 按下: 0x");
           Serial.println(_currentKey, HEX);
@@ -125,7 +139,7 @@ void AutoMode::update() {
         _keyboard->release(_currentKey);
         logKeyEvent(getCurrentKeyName(), false);
         _lastActionTime = now;
-        _nextInterval = getRandomInterval();
+        _nextInterval = gaussianInRange(_config.minIntervalMs, _config.maxIntervalMs);
         _state = AUTO_IDLE;
         Serial.print("[Auto] 释放: 0x");
         Serial.println(_currentKey, HEX);
@@ -138,103 +152,16 @@ void AutoMode::update() {
   }
 }
 
-uint8_t AutoMode::selectRandomKey() {
-  // 收集所有权重
-  float weights[10] = {
-    _config.moveForwardWeight,  // 0: W
-    _config.moveBackWeight,     // 1: S
-    _config.moveLeftWeight,     // 2: A
-    _config.moveRightWeight,    // 3: D
-    _config.turnLeftWeight,     // 4: Left Arrow
-    _config.turnRightWeight,    // 5: Right Arrow
-    _config.jumpWeight,         // 6: Space
-    _config.weightC,            // 7: C
-    _config.weightZ,            // 8: Z
-    _config.idleWeight          // 9: Idle (no key)
-  };
-
-  uint8_t keys[10] = {
-    HID_KEY_W,
-    HID_KEY_S,
-    HID_KEY_A,
-    HID_KEY_D,
-    HID_KEY_LEFT_ARROW,
-    HID_KEY_RIGHT_ARROW,
-    HID_KEY_SPACE,
-    HID_KEY_C,
-    HID_KEY_Z,
-    0x00 // 空闲，不按任何键
-  };
-
-  // 计算权重总和
-  float totalWeight = 0;
-  for (int i = 0; i < 10; i++) {
-    totalWeight += weights[i];
-  }
-
-  if (totalWeight <= 0) return 0x00;
-
-  // 加权随机选择
-  float r = (float)random(0, 10000) / 10000.0 * totalWeight;
-  float cumulative = 0;
-  for (int i = 0; i < 10; i++) {
-    cumulative += weights[i];
-    if (r <= cumulative) {
-      return keys[i];
-    }
-  }
-
-  return keys[0]; // 默认返回 W
-}
-
-unsigned long AutoMode::getRandomInterval() {
-  // 使用 Box-Muller 变换生成近似正态分布的随机数
-  float mean = (_config.minIntervalMs + _config.maxIntervalMs) / 2.0;
-  float stddev = (_config.maxIntervalMs - _config.minIntervalMs) / 6.0;
-  float interval = boxMullerRandom(mean, stddev);
-
-  // 限制在范围内
-  if (interval < _config.minIntervalMs) interval = _config.minIntervalMs;
-  if (interval > _config.maxIntervalMs) interval = _config.maxIntervalMs;
-
-  return (unsigned long)interval;
-}
-
-unsigned long AutoMode::getRandomHoldTime() {
-  float mean = (_config.minHoldMs + _config.maxHoldMs) / 2.0;
-  float stddev = (_config.maxHoldMs - _config.minHoldMs) / 6.0;
-  float holdTime = boxMullerRandom(mean, stddev);
-
-  if (holdTime < _config.minHoldMs) holdTime = _config.minHoldMs;
-  if (holdTime > _config.maxHoldMs) holdTime = _config.maxHoldMs;
-
-  return (unsigned long)holdTime;
-}
-
 String AutoMode::getCurrentKeyName() {
   if (_state != AUTO_PRESSING || _currentKey == 0) {
     return "";
   }
-  switch (_currentKey) {
-    case HID_KEY_W: return "w";
-    case HID_KEY_S: return "s";
-    case HID_KEY_A: return "a";
-    case HID_KEY_D: return "d";
-    case HID_KEY_LEFT_ARROW: return "left";
-    case HID_KEY_RIGHT_ARROW: return "right";
-    case HID_KEY_SPACE: return "space";
-    case HID_KEY_C: return "c";
-    case HID_KEY_Z: return "z";
-    default: return "";
+  for (int i = 0; i < 10; i++) {
+    if (RANDOM_KEY_HID[i] != 0 && RANDOM_KEY_HID[i] == _currentKey) {
+      return RANDOM_KEY_NAME[i];
+    }
   }
-}
-
-float AutoMode::boxMullerRandom(float mean, float stddev) {
-  // Box-Muller 变换：将均匀分布转换为正态分布
-  float u1 = (float)random(1, 10000) / 10000.0; // 避免 0
-  float u2 = (float)random(0, 10000) / 10000.0;
-  float z = sqrt(-2.0 * log(u1)) * cos(2.0 * PI * u2);
-  return mean + z * stddev;
+  return "";
 }
 
 // ---- 按键事件日志 ----
@@ -299,47 +226,18 @@ uint32_t AutoMode::getTotalCount() const {
 // ========== 静态工具方法：索引/名称转换 ==========
 
 String AutoMode::indexToName(uint8_t index) {
-  switch (index) {
-    case 0: return "w";
-    case 1: return "s";
-    case 2: return "a";
-    case 3: return "d";
-    case 4: return "left";
-    case 5: return "right";
-    case 6: return "space";
-    case 7: return "c";
-    case 8: return "z";
-    case 9: return "";
-    default: return "";
-  }
+  if (index < 10) return RANDOM_KEY_NAME[index];
+  return "";
 }
 
 const char* AutoMode::indexToNameCStr(uint8_t index) {
-  switch (index) {
-    case 0: return "w";
-    case 1: return "s";
-    case 2: return "a";
-    case 3: return "d";
-    case 4: return "left";
-    case 5: return "right";
-    case 6: return "space";
-    case 7: return "c";
-    case 8: return "z";
-    case 9: return "";
-    default: return "";
-  }
+  if (index < 10) return RANDOM_KEY_NAME[index];
+  return "";
 }
 
 int AutoMode::keyNameToIndex(const String& keyName) {
-  if (keyName == "w") return 0;
-  if (keyName == "s") return 1;
-  if (keyName == "a") return 2;
-  if (keyName == "d") return 3;
-  if (keyName == "left") return 4;
-  if (keyName == "right") return 5;
-  if (keyName == "space") return 6;
-  if (keyName == "c") return 7;
-  if (keyName == "z") return 8;
-  if (keyName == "") return 9;  // idle
+  for (int i = 0; i < 10; i++) {
+    if (keyName == RANDOM_KEY_NAME[i]) return i;
+  }
   return -1;
 }

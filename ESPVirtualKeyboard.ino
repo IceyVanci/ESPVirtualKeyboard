@@ -24,6 +24,7 @@
 #include "web_server.h"
 #include "config_manager.h"
 #include "seq_mode.h"
+#include "random_util.h"
 #include <ArduinoJson.h>
 
 // 全局对象
@@ -95,6 +96,9 @@ void setup() {
   Serial.println("  ESP32 BLE Keyboard Controller");
   Serial.println("================================");
 
+  // 初始化随机数种子（自动模式与顺序模式随机能力共用）
+  randomUtilInit();
+
   // 初始化 LED
   pinMode(LED_D4, OUTPUT);
   pinMode(LED_D5, OUTPUT);
@@ -144,11 +148,12 @@ void setup() {
   // 自动模式默认关闭
   autoMode.setEnabled(false);
 
+  // 启动 WiFi（非阻塞；空凭据进入串口配网等待，配网后自动连接）
+  // 注意：必须先初始化网络栈（WiFi.mode），否则 Web 服务器创建 socket 会触发 lwIP 断言
+  startWiFi();
+
   // 启动 Web 服务器
   webCtrl.begin();
-
-  // 启动 WiFi（非阻塞；空凭据进入串口配网等待，配网后自动连接）
-  startWiFi();
 
   Serial.println("================================");
   Serial.println("系统就绪！");
@@ -188,7 +193,7 @@ void updateStatusLED() {
       lastLedToggle = now;
     }
   } else if (state == BLE_STATE_CONNECTED) {
-    if (autoMode.isEnabled()) {
+    if (autoMode.isEnabled() || seqMode.isPlaying()) {
       if (now - lastLedToggle >= LED_BLINK_SLOW_MS) {
         ledToggleState = !ledToggleState;
         digitalWrite(LED_D5, ledToggleState ? HIGH : LOW);
@@ -246,6 +251,10 @@ void syncNtp() {
 }
 
 void startWiFi() {
+  // 先初始化网络栈（lwIP/esp_netif）：Web 服务器创建 socket 依赖它（core 3.x 不再由 initArduino 初始化）
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+
   if (wifiSsid.length() == 0) {
     wifiState = WIFI_PROVISION;
     wifiConnectEventSent = false;
@@ -260,8 +269,6 @@ void startWiFi() {
   // 连接前复位驱动状态（重试时避免旧状态卡死）
   WiFi.disconnect();
 
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
   WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());

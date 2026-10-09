@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "random_util.h"
 
 // 按键事件结构体（同时保留可读名称与索引，避免依赖 String 的旧路径）
 struct KeyEvent {
@@ -66,6 +67,7 @@ public:
 
   void setConfig(const AutoModeConfig& config);
   AutoModeConfig getConfig();
+  RandomKeyWeights getRandomWeights();  // 供顺序模式快照随机键权重
   void setEnabled(bool enabled);
   bool isEnabled();
   void update();
@@ -104,10 +106,6 @@ private:
 
   void            logKeyEvent(const String& keyName, bool pressed);
   int             keyNameToIndex(const String& keyName);
-  uint8_t         selectRandomKey();
-  unsigned long   getRandomInterval();
-  unsigned long   getRandomHoldTime();
-  float           boxMullerRandom(float mean, float stddev);
 };
 
 #endif // AUTO_MODE_H

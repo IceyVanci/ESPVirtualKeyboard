@@ -87,9 +87,12 @@ POST /api/config
     "weightSP": 0.08,
     "weightC": 0.05,
     "weightZ": 0.05,
-    "weightIdle": 0.08
+    "weightIdle": 0.08,
+    "name": ""
 }
 ```
+
+> `name` 为当前生效配置名（活动自动栏位名；未保存到栏位/导入当前后为空串）。
 
 #### POST 参数
 
@@ -341,7 +344,7 @@ slot=0&json={...}
 - `slot` (必需): 槽位索引 0-4
 - `json` (必需): JSON 格式的配置数据
 
-**说明**: JSON 由 ArduinoJson **严格解析**（非法返回 400 `{"error":"import failed: invalid JSON"}`）；`name` 字段经 `sanitizeName()` 消毒（剔除 `"` `\` `<` `>` 与控制字符），数值经范围钳制。
+**说明**: JSON 由 ArduinoJson **严格解析**（非法返回 400 `{"error":"import failed: invalid JSON"}`）；`name` 字段经 `sanitizeName()` 消毒（保留可打印 ASCII 与合法 UTF-8/中文，剔除 `"` `\` `<` `>` 与控制字符）并按码点截断至 20 字符，消毒后为空时回退为「配置N」，数值经范围钳制。
 
 **响应**:
 ```json
@@ -374,7 +377,7 @@ json={...}
 **参数**:
 - `json` (必需): JSON 格式的配置数据
 
-**说明**: JSON 由 ArduinoJson **严格解析**（非法返回 400 `{"error":"invalid config JSON"}`）；`name` 经 `sanitizeName()` 消毒，数值范围钳制，`version` 必须为 1。
+**说明**: JSON 由 ArduinoJson **严格解析**（非法返回 400 `{"error":"invalid config JSON"}`）；`name` 经 `sanitizeName()` 消毒（支持中文），数值范围钳制，`version` 必须为 1。
 
 **响应**:
 ```json
@@ -424,13 +427,14 @@ GET /api/seq/config
 POST /api/seq/config
 Content-Type: application/x-www-form-urlencoded
 
-json={"version":1,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":300}]}
+json={"version":2,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":300},{"k":"a","h":100,"g":100,"hr":[60,180],"gr":[100,400]}]}
 ```
 
-- **GET**：返回当前顺序配置（含步骤，供前端编辑/录制后应用）
-- **POST**：应用编辑后的顺序配置（校验版本/键名/时长范围）；写操作需登录
-- 若 `json` 解析失败返回 400 `{"error":"invalid seq JSON"}`
-- 步骤键名自动 `toLowerCase()` 容错大写；仍非法（无法映射 HID）的键名降级为**暂停步骤**（空键名），不会截断整条序列；`name` 经 `sanitizeName()` 消毒
+- **GET**：返回当前顺序配置（v2 格式，供前端编辑/录制后应用）
+- **POST**：应用编辑后的顺序配置（缺省 `version` 视为 1，显式 1/2 接受；校验步数/键名/时长范围/体积）；写操作需登录
+- 错误码：语法/结构非法返回 400 `{"error":"invalid seq JSON"}`；步数 >64 返回 400 `{"error":"too many steps"}`；体积 >3000B 返回 413 `{"error":"seq too large"}`（不写入）
+- 步骤字段：`k` 键名（空=暂停；`rk=1` 时保留但不参与回放）、`h/g` 固定时长、`r` 重复次数（1–99，1 省略）、`rk` 随机键（复用自动模式权重）、`hr/gr` 随机时序 min–max（长度 2，min>max 自动交换）
+- 步骤键名自动 `toLowerCase()` 容错大写；仍非法（无法映射 HID）的键名降级为**暂停步骤**（空键名），不会截断整条序列；`name` 经 `sanitizeName()` 消毒（支持中文）
 
 ---
 
@@ -464,7 +468,14 @@ POST /api/seq/slot/import slot=0&json={...}  // 导入到栏位（需登录）
 POST /api/seq/slot/export slot=0             // 导出栏位 JSON 文件
 ```
 
-与自动模式槽位接口平行，栏位索引 0-4。
+与自动模式槽位接口平行，栏位索引 0-4。栏位名支持中文，消毒后为空时自动回退为「序列N」。
+
+错误码（`save` / `import`）：
+
+- 空序列：400 `{"error":"empty sequence"}`（仅 save）
+- 非法 JSON/步数 >64：400 `{"error":"invalid seq JSON"}` / `{"error":"too many steps"}`
+- 体积 >3000B：413 `{"error":"seq too large"}`（不写入 NVS）
+- NVS 写入失败（存储满）：500 `{"error":"storage full"}`，且该栏位「已用」标记会回滚
 
 ---
 
@@ -474,7 +485,7 @@ POST /api/seq/slot/export slot=0             // 导出栏位 JSON 文件
 GET /api/config/export-all
 ```
 
-下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位全部预设（只读，公开）。
+下载单个 JSON 文件，包含 5 个自动模式栏位 + 5 个顺序模式栏位全部预设（只读，公开）。每个条目的名称同时写入条目级 `name` 与 `config.name`，保证导出→导入往返不丢名。
 
 ---
 
@@ -663,9 +674,12 @@ POST /api/config
     "weightSP": 0.08,
     "weightC": 0.05,
     "weightZ": 0.05,
-    "weightIdle": 0.08
+    "weightIdle": 0.08,
+    "name": ""
 }
 ```
+
+> `name` is the active preset name (active auto slot name; empty string when not saved to a slot / after importing current).
 
 #### POST Parameters
 
@@ -905,7 +919,7 @@ slot=0&json={...}
 - `slot` (required): Slot index 0-4
 - `json` (required): JSON config data
 
-**Notes**: JSON is **strictly parsed** with ArduinoJson (malformed input returns 400 `{"error":"import failed: invalid JSON"}`); the `name` field is sanitized via `sanitizeName()` (strips `"` `\` `<` `>` and control chars) and numeric fields are range-clamped.
+**Notes**: JSON is **strictly parsed** with ArduinoJson (malformed input returns 400 `{"error":"import failed: invalid JSON"}`); the `name` field is sanitized via `sanitizeName()` (printable ASCII and valid UTF-8/Chinese kept; `"` `\` `<` `>` and control chars stripped), truncated to 20 code points, and falls back to "配置N" when empty; numeric fields are range-clamped.
 
 **Response**:
 ```json
@@ -936,7 +950,7 @@ json={...}
 **Parameters**:
 - `json` (required): JSON config data
 
-**Notes**: JSON is **strictly parsed** with ArduinoJson (malformed input returns 400 `{"error":"invalid config JSON"}`); `name` is sanitized via `sanitizeName()`, numeric fields are range-clamped, and `version` must be 1.
+**Notes**: JSON is **strictly parsed** with ArduinoJson (malformed input returns 400 `{"error":"invalid config JSON"}`); `name` is sanitized via `sanitizeName()` (Chinese supported), numeric fields are range-clamped, and `version` must be 1.
 
 **Response**:
 ```json
@@ -986,13 +1000,14 @@ GET /api/seq/config
 POST /api/seq/config
 Content-Type: application/x-www-form-urlencoded
 
-json={"version":1,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":300}]}
+json={"version":2,"loop":false,"loopGapMs":1000,"steps":[{"k":"w","h":120,"g":300},{"k":"a","h":100,"g":100,"hr":[60,180],"gr":[100,400]}]}
 ```
 
-- **GET**: Returns the current sequence config (with steps, for editing/apply after recording)
-- **POST**: Applies the edited sequence config (validates version/key names/duration ranges); auth required
-- Returns 400 `{"error":"invalid seq JSON"}` on parse failure
-- Step key names are lowercased automatically (`toLowerCase()`) to tolerate uppercase; keys still unmappable to HID degrade to a **pause step** (empty key name) instead of truncating the sequence; `name` is sanitized via `sanitizeName()`
+- **GET**: Returns the current sequence config (v2 format, for editing/apply after recording)
+- **POST**: Applies the edited sequence config (absent `version` is treated as 1; explicit 1/2 accepted; validates step count/key names/duration ranges/size); auth required
+- Errors: malformed structure returns 400 `{"error":"invalid seq JSON"}`; more than 64 steps returns 400 `{"error":"too many steps"}`; size over 3000B returns 413 `{"error":"seq too large"}` (not written)
+- Step fields: `k` key name (empty = pause; preserved but ignored when `rk=1`), `h/g` fixed durations, `r` repeat count (1–99, omitted when 1), `rk` random key (reuses auto-mode weights), `hr/gr` random timing min–max (length 2; min>max is swapped)
+- Step key names are lowercased automatically (`toLowerCase()`) to tolerate uppercase; keys still unmappable to HID degrade to a **pause step** (empty key name) instead of truncating the sequence; `name` is sanitized via `sanitizeName()` (Chinese supported)
 
 ---
 
@@ -1028,6 +1043,13 @@ POST /api/seq/slot/export slot=0             // Export slot JSON file
 
 Parallel to the auto mode slot endpoints; slot index 0-4.
 
+Error codes (`save` / `import`):
+
+- Empty sequence: 400 `{"error":"empty sequence"}` (save only)
+- Invalid JSON / more than 64 steps: 400 `{"error":"invalid seq JSON"}` / `{"error":"too many steps"}`
+- Size over 3000B: 413 `{"error":"seq too large"}` (not written to NVS)
+- NVS write failure (storage full): 500 `{"error":"storage full"}`, and the slot's "used" flag is rolled back
+
 ---
 
 ### 21. Export All
@@ -1036,7 +1058,7 @@ Parallel to the auto mode slot endpoints; slot index 0-4.
 GET /api/config/export-all
 ```
 
-Downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots (read-only, public).
+Downloads a single JSON file containing all presets from 5 auto slots + 5 sequence slots (read-only, public). Each item's name is written to both the item-level `name` and `config.name`, so export → import round-trips never lose names.
 
 ---
 

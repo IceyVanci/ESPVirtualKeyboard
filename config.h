@@ -200,7 +200,7 @@
 #define WEB_AUTH_LOCKOUT_MS 30000
 
 // ========== 固件信息 ==========
-#define FW_VERSION "20261009"
+#define FW_VERSION "20261010"
 #define FW_BUILD_DATE __DATE__   // 编译日期
 #define FW_BUILD_TIME __TIME__   // 编译时间
 
@@ -215,5 +215,6 @@
 
 // ========== 顺序模式配置 ==========
 #define SEQ_MAX_STEPS 64        // 单条顺序配置的最大步数
+#define SEQ_JSON_MAX_BYTES 3000 // 单槽 JSON 体积上限（NVS 单值上限约 4000B；nvs 分区共 20,480B，5 槽 × 3000B 可容纳）
 
 #endif // CONFIG_H
