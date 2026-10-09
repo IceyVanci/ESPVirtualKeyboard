@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "proto": 1,
+  "product": { "zh": "ESP 虚拟键盘", "en": "ESP Virtual Keyboard" },
+  "defaultLocale": "zh",
+  "variants": [
+    { "id": "default", "label": { "zh": "标准固件", "en": "Standard" } }
+  ],
+  "switches": {
+    "write":    { "default": true,  "visible": true },
+    "update":   { "default": true,  "visible": false },
+    "override": { "default": false, "visible": true },
+    "erase":    { "default": true,  "visible": true }
+  },
+  "groups": [
+    { "id": "network", "label": { "zh": "网络", "en": "Network" } }
+  ],
+  "fields": [
+    { "key": "ssid", "group": "network",
+      "label": { "zh": "WiFi 名称 (SSID)", "en": "WiFi SSID" },
+      "type": "text", "maxlength": 32,
+      "placeholder": { "zh": "留空 = 不修改", "en": "empty = unchanged" } },
+    { "key": "pass", "group": "network",
+      "label": { "zh": "WiFi 密码", "en": "WiFi password" },
+      "type": "password", "sensitive": true, "maxlength": 63,
+      "placeholder": { "zh": "留空 = 不修改", "en": "empty = unchanged" } }
+  ],
+  "protocol": {
+    "ping": "ping",
+    "pongEvt": "pong",
+    "status": "status",
+    "statusEvt": "status",
+    "credsCmd": "wifi",
+    "credsSavedEvt": "wifi_saved",
+    "clearCmd": "wifi_clear",
+    "clearAckEvt": "wifi_saved",
+    "wifiConnectingEvt": "wifi_connecting",
+    "wifiConnectedEvt": "wifi_connected",
+    "wifiFailedEvt": "wifi_failed",
+    "errorEvt": "error"
+  }
+}

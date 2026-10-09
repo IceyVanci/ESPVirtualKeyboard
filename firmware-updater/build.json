@@ -1,0 +1,19 @@
+{
+  "product": "esp-virtual-keyboard",
+  "toolName": { "zh": "ESP 虚拟键盘 · 固件升级工具", "en": "ESP Virtual Keyboard · Firmware Updater" },
+  "sketchDir": "F:\\ESPVirtualKeyboard",
+  "sketchName": "ESPVirtualKeyboard",
+  "variants": [ { "id": "default", "copySubdir": "" } ],
+  "versionMacro": "FW_VERSION",
+  "credentialMacros": [ "WIFI_SSID", "WIFI_PASSWORD" ],
+  "genericNeedles": [],
+  "allowValues": [ "Debug", "12345678", "127.0.0.1", "192.168.4.1", "255.255.255.0", "0.0.0.0" ],
+  "chip": "esp32c3",
+  "chipExpect": "esp32c3",
+  "fqbn": "esp32:esp32:esp32c3:UploadSpeed=921600,CDCOnBoot=cdc,CPUFreq=160,FlashFreq=80,FlashMode=dio,FlashSize=4M,PartitionScheme=huge_app,DebugLevel=none,EraseFlash=none",
+  "coreDir": "C:\\Users\\16454\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11",
+  "flash": { "mode": "dio", "freq": "80m", "size": "4MB" },
+  "appSlot": 3145728,
+  "appWarn": 2831155,
+  "profileSource": "profile.json"
+}

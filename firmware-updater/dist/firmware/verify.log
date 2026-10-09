@@ -1,0 +1,13 @@
+esp-virtual-keyboard firmware package - empty-credential verification
+version   : 20261009
+generated : 2026-10-09 14:28:05
+mode      : firmware-only
+L1 source : config.h copy rewritten to empty (empty_creds.ps1 self-check passed)
+L2 source : assertion passed (2 credential macros == empty)
+L3 binary : byte-level scan (ASCII + UTF-16LE)
+generator : build-kit\build_common.ps1 + empty_creds.ps1 (L1/L2/L3 fail-closed)
+
+[default] scan hits = 0  (bootloader/partitions/boot_app0/app: OK)
+
+allowlist (legit values in firmware) : Debug, 12345678, 127.0.0.1, 192.168.4.1, 255.255.255.0, 0.0.0.0
+result: PASS - distributed firmware contains no credentials

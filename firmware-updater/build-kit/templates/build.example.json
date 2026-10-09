@@ -1,0 +1,21 @@
+{
+  "product": "my-project",
+  "toolName": { "zh": "我的项目 · 固件升级工具", "en": "My Project · Firmware Updater" },
+  "sketchDir": "F:\\path\\to\\MyProject",
+  "sketchName": "MyProject",
+  "variants": [ { "id": "default", "copySubdir": "" } ],
+  "versionMacro": "FIRMWARE_VERSION",
+  "credentialMacros": [ "WIFI_SSID", "WIFI_PASSWORD", "MY_API_KEY" ],
+  "genericNeedles": [],
+  "allowValues": [ "127.0.0.1" ],
+  "chip": "esp32c3",
+  "chipExpect": "esp32c3",
+  "fqbn": "esp32:esp32:esp32c3:UploadSpeed=921600,CDCOnBoot=cdc,CPUFreq=160,FlashFreq=80,FlashMode=dio,FlashSize=4M,PartitionScheme=huge_app,DebugLevel=none,EraseFlash=none",
+  "coreDir": "C:\\Users\\<用户名>\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11",
+  "flash": { "mode": "dio", "freq": "80m", "size": "4MB" },
+  "appSlot": 3145728,
+  "appWarn": 2831155,
+  "profileSource": "profile.json",
+
+  "runtimeToolDir": "runtime"
+}

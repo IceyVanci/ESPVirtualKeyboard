@@ -31,6 +31,7 @@ stadia/
 UPGRADE_PLAN_键盘中继_升级计划.md
 UPGRADE_PLAN_固件升级工具_方案.md
 
-# Firmware updater (build_tmp is transient; firmware bins + manifest + VERSION + zip are release artifacts, tracked)
-firmware-updater/build_tmp/
-!firmware-updater/firmware/*.bin
+# Firmware updater (build-kit) outputs: firmware bins + manifest/profile/VERSION + verify.log tracked; zip/tmp ignored
+firmware-updater/dist/build_tmp/
+firmware-updater/dist/*.zip
+!firmware-updater/dist/firmware/**/*.bin

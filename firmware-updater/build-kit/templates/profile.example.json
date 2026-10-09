@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "proto": 1,
+  "product": { "zh": "我的项目", "en": "My Project" },
+  "defaultLocale": "zh",
+  "variants": [ { "id": "default", "label": { "zh": "标准固件", "en": "Standard" } } ],
+  "switches": {
+    "write":    { "default": true,  "visible": true },
+    "update":   { "default": true,  "visible": true },
+    "override": { "default": false, "visible": true },
+    "erase":    { "default": true,  "visible": true }
+  },
+  "groups": [ { "id": "network", "label": { "zh": "网络", "en": "Network" } } ],
+  "fields": [
+    { "key": "ssid", "group": "network",
+      "label": { "zh": "WiFi 名称 (SSID)", "en": "WiFi SSID" },
+      "type": "text", "maxlength": 32 },
+    { "key": "pass", "group": "network",
+      "label": { "zh": "WiFi 密码", "en": "WiFi password" },
+      "type": "password", "sensitive": true, "maxlength": 63 }
+  ]
+}
