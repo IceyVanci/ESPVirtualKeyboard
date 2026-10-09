@@ -10,7 +10,7 @@
     "write":    { "default": true,  "visible": true },
     "update":   { "default": true,  "visible": false },
     "override": { "default": false, "visible": true },
-    "erase":    { "default": true,  "visible": true }
+    "erase":    { "default": false, "visible": true }
   },
   "groups": [
     { "id": "network", "label": { "zh": "网络", "en": "Network" } }
