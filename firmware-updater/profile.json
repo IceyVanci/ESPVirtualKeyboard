@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "proto": 1,
   "product": { "zh": "ESP 虚拟键盘", "en": "ESP Virtual Keyboard" },
   "defaultLocale": "zh",
@@ -38,5 +38,34 @@
     "wifiConnectedEvt": "wifi_connected",
     "wifiFailedEvt": "wifi_failed",
     "errorEvt": "error"
+  },
+  "actions": [
+    { "id": "flash", "type": "flash",
+      "label": { "zh": "开始升级", "en": "Flash firmware" } },
+    { "id": "submit", "type": "submit",
+      "label": { "zh": "写入配置", "en": "Apply configuration" },
+      "command": "wifi", "gate": "write",
+      "static": { "write": true },
+      "switches": ["override"],
+      "waitFor": ["wifi_saved"],
+      "followUp": {
+        "waitFor": ["wifi_connected", "wifi_failed", "error"],
+        "timeoutMs": 45000, "ifField": "ssid"
+      } },
+    { "id": "clear", "type": "custom",
+      "label": { "zh": "清除配网信息", "en": "Clear provisioning" },
+      "command": "wifi_clear",
+      "static": { "groups": ["all"] },
+      "waitFor": ["wifi_saved"] }
+  ],
+  "statusView": {
+    "mode": "summary",
+    "summary": [
+      { "key": "compile",  "label": { "zh": "内置凭据", "en": "Built-in" }, "type": "bool" },
+      { "key": "nvs",      "label": { "zh": "NVS 凭据", "en": "NVS" },      "type": "bool" },
+      { "key": "override", "label": { "zh": "覆盖",     "en": "Override" }, "type": "bool" },
+      { "key": "state",    "label": { "zh": "网络",     "en": "Network" },  "type": "state" },
+      { "key": "ip",       "label": { "zh": "IP",       "en": "IP" },       "type": "value" }
+    ]
   }
 }

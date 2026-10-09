@@ -340,7 +340,7 @@ Write-Host "      verify.log written"
 
 # ---------------------------------------------------------------- 8. bundle：复制运行时工具
 if ($Bundle) {
-    $toolFiles = @('server.ps1', 'esptool.exe', 'flash_cli.bat', '一键升级.bat', 'upgrade.bat', 'README.md')
+    $toolFiles = @('server.ps1', 'esptool.exe', 'flash_cli.bat', '一键升级.bat', 'upgrade.bat', 'README.md', 'version.json', 'VERSION')
     foreach ($f in $toolFiles) {
         $p = Join-Path $runtimeToolDir $f
         if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $OutDir -Force }

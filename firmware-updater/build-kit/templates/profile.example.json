@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "proto": 1,
   "product": { "zh": "我的项目", "en": "My Project" },
   "defaultLocale": "zh",
@@ -18,5 +18,30 @@
     { "key": "pass", "group": "network",
       "label": { "zh": "WiFi 密码", "en": "WiFi password" },
       "type": "password", "sensitive": true, "maxlength": 63 }
-  ]
+  ],
+
+  "_comment": "schema 2 可选段；省略 actions/statusView 时自动合成默认（等同 schema 1）",
+  "protocol": {
+    "ping": "ping", "pongEvt": "pong", "status": "status", "statusEvt": "status",
+    "credsCmd": "creds", "credsSavedEvt": "creds_saved",
+    "clearCmd": "creds_clear", "clearAckEvt": "creds_saved",
+    "wifiConnectingEvt": "wifi_connecting",
+    "wifiConnectedEvt": "wifi_connected",
+    "wifiFailedEvt": "wifi_failed",
+    "errorEvt": "error"
+  },
+  "actions": [
+    { "id": "flash", "type": "flash", "label": { "zh": "开始升级", "en": "Flash firmware" } },
+    { "id": "submit", "type": "submit", "label": { "zh": "写入配置", "en": "Apply configuration" },
+      "command": "creds", "gate": "write",
+      "static": { "write": true },
+      "switches": ["update", "override"],
+      "waitFor": ["creds_saved"],
+      "followUp": { "waitFor": ["wifi_connected", "wifi_failed", "error"], "timeoutMs": 45000, "ifField": "ssid" } },
+    { "id": "clear", "type": "custom", "label": { "zh": "清除配置", "en": "Clear configuration" },
+      "command": "creds_clear", "static": { "groups": ["all"] }, "waitFor": ["creds_saved"] }
+  ],
+  "statusView": {
+    "mode": "auto"
+  }
 }

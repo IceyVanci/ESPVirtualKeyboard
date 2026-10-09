@@ -63,7 +63,7 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 1. 克隆本项目
 2. 配置 WiFi（二选一）：
    - 直接修改 `config.h` 中的 `WIFI_SSID` / `WIFI_PASSWORD`（编译期凭据，优先级最高）；或
-   - 烧录后用 `firmware-updater` 工具「仅配网」写入（NVS 持久，免重新编译；分发包固件强制为空凭据，请用此方式）
+   - 烧录后用 `ESPEZUpdater` 固件升级工具「写入配置」写入（NVS 持久，免重新编译；分发包固件强制为空凭据，请用此方式；固件包见 `firmware-updater/`）
 3. Arduino IDE 打开 `ESPVirtualKeyboard.ino`
 4. 选择开发板 `ESP32C3 Dev Module`
 5. **设置关键选项**（详见 [Arduino 写入设置指南](ARDUINO_SETUP.md)）：
@@ -149,7 +149,7 @@ This project uses the Luat ESP32C3 as a validation board, but based on some of i
 1. Clone this repository
 2. Configure WiFi (choose one):
    - Edit `WIFI_SSID` / `WIFI_PASSWORD` in `config.h` (compile-time credentials, highest priority); or
-   - Use the `firmware-updater` tool's "仅配网 / provision only" after flashing (persisted in NVS, no recompile; distribution packages ship with forced-empty credentials, so use this)
+   - Use the `ESPEZUpdater` tool's "Apply configuration" after flashing (persisted in NVS, no recompile; distribution packages ship with forced-empty credentials, so use this; firmware package under `firmware-updater/`)
 3. Open `ESPVirtualKeyboard.ino` in Arduino IDE
 4. Select board `ESP32C3 Dev Module`
 5. **Set critical options** (see [Arduino Setup Guide](ARDUINO_SETUP.md)):
