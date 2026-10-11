@@ -1,6 +1,6 @@
 # ESP Virtual Keyboard
 
-ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，支持 Web 控制面板、自动模式和配置管理。
+ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，支持 Web 控制面板、自动模式、顺序模式和配置管理。
 
 [English](#english) | [中文](#中文)
 
@@ -20,16 +20,16 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 - **移动端自适应缩放**：键盘按视口宽度自动缩放，移动设备也能完整显示
 - **自动模式**：设备具备可配置的自动按键模拟能力，支持加权随机按键分配和正态分布时间间隔
 - **顺序模式**：可录制按键序列（时长/间隔），步骤支持插入/复制/删除/上下移/置顶置底/拖拽排序，可设重复次数；每步可选随机键（复用自动模式权重）与随机时序（hold/gap 正态波动）；实时校验步骤数（64）与体积（3KB）；保存到 5 个独立栏位，支持循环播放与循环周期调整，录制时可选择是否同步发送按键
-- **一键导入/导出全部**：banner 一键导出所有模式预设，导入时自动跳过相同配置、不同配置逐个选择目标模式与栏位
-- **配置管理**：5 个持久化配置槽位（NVS），支持保存/加载/删除，JSON 导入/导出（文件名使用槽位名称）；自动模式面板支持「应用」和「保存到配置」按钮
-- **蓝牙名称修改**：Web 面板在线修改设备蓝牙名称（NVS 持久化，重启 BLE 生效）
+- **一键导入/导出全部**：banner 一键导出所有模式预设，导入时自动跳过相同配置、不同配置逐个选择目标模式与栏位，预设名称（含中文）随导入保留
+- **配置管理**：5 个持久化配置槽位（NVS），支持保存/加载/删除，JSON 导入/导出（文件名使用槽位名称）；预设名支持中文，面板顶部显示当前生效的预设名；自动模式面板支持「应用」和「保存到配置」按钮
+- **蓝牙名称修改**：Web 面板在线修改设备蓝牙名称（NVS 持久化，重启 BLE 生效），1–24 字符，支持中文
 - **Web 登录验证**（可选）：条件编译 `ENABLE_WEB_AUTH` 开启面板登录与写操作鉴权，防止局域网内任意设备注入按键
 - **卡键安全超时**：按键后超时未释放自动释放，防止浏览器崩溃/断连导致卡键
 - **权重动态限制**：实时显示权重总计，后端自动归一化兜底
 - **按键日志**：实时显示自动模式按键记录
 - **按键统计**：按键次数和比例的可视化图表
 - **明暗主题**：一键切换，localStorage 持久化
-- **LED 状态指示**：D4=按键闪烁，D5=BLE 状态
+- **LED 状态指示**：D4=按键闪烁，D5=状态指示（BLE 广播中闪烁；连接后空闲常亮；自动或顺序运行中慢闪）
 - **WiFi 断线重连**：自动检测并重连（非阻塞状态机）
 - **固件信息页脚**：页面底部显示版本与构建日期
 
@@ -63,7 +63,7 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 1. 克隆本项目
 2. 配置 WiFi（二选一）：
    - 直接修改 `config.h` 中的 `WIFI_SSID` / `WIFI_PASSWORD`（编译期凭据，优先级最高）；或
-   - 烧录后用 `ESPEZUpdater` 固件升级工具「写入配置」写入（NVS 持久，免重新编译；分发包固件强制为空凭据，请用此方式；固件包见 `firmware-updater/`）
+   - 烧录后用 [ESPEZUpdater](https://github.com/IceyVanci/ESPEZUpdater) 固件升级工具「写入配置」写入（NVS 持久，免重新编译；分发包固件强制为空凭据，请用此方式；固件包与出包说明见 `firmware-updater/`，用法见下方「固件更新」章节）
 3. Arduino IDE 打开 `ESPVirtualKeyboard.ino`
 4. 选择开发板 `ESP32C3 Dev Module`
 5. **设置关键选项**（详见 [Arduino 写入设置指南](ARDUINO_SETUP.md)）：
@@ -74,15 +74,51 @@ ESP32-C3 BLE 虚拟键盘 — 基于蓝牙低功耗的硬件输入模拟器，�
 8. 浏览器访问 IP 地址打开控制面板
 9. Windows 蓝牙设置中配对 `ESP Virtual Keyboard`
 
+### 固件更新
+
+> 两种方式均**默认保留设备已保存的配置**（NVS 不被清除）；固件包为强制空凭据、可安全分发，WiFi 凭据由页面填写并经串口写入。
+
+#### 方法一：Arduino IDE（开发者 / 修改源码）
+
+1. 拉取/更新本仓库，用 Arduino IDE 打开 `ESPVirtualKeyboard.ino`
+2. 开发板选择 `ESP32C3 Dev Module`，关键选项见 [Arduino 写入设置指南](ARDUINO_SETUP.md)：
+   - Partition Scheme → `Huge APP (3MB No OTA)`
+   - USB CDC On Boot → `Enabled`
+   - Flash Mode → `DIO`
+3. （可选）修改 `config.h`：`WIFI_SSID` / `WIFI_PASSWORD`、`FW_VERSION`
+4. 点击「上传」；完成后打开串口监视器（115200）查看 IP
+
+#### 方法二：ESPEZUpdater（图形化一键升级，推荐）
+
+工具地址：<https://github.com/IceyVanci/ESPEZUpdater>（需 **v20261009 及以上**，支持本项目 profile schema 2）
+
+1. 获取固件包（二选一）：
+   - 直接使用仓库内随源码提交的产物目录 `firmware-updater/dist/firmware/`（含 `manifest.json`、`profile.json` 与四件套 bin）；或
+   - 自行出包：进入 `firmware-updater/` 执行
+     `powershell -NoProfile -ExecutionPolicy Bypass -File .\build-kit\build_common.ps1 -Build .\build.json`
+     （生成 `dist/固件包_v<版本>.zip`，详见 [firmware-updater/使用说明.md](firmware-updater/使用说明.md)）
+2. 下载并解压 ESPEZUpdater，双击 `一键升级.bat`（浏览器自动打开本地页面，默认 `http://127.0.0.1:8123`）
+3. 点击「选择固件目录…」选择 `firmware-updater/dist/firmware/`，或把 `固件包_v<版本>.zip` 拖入页面
+4. 填写 WiFi 名称/密码（**可留空 = 不修改**）→ 点击「连接设备」→「开始升级」
+5. 刷写完成后工具自动经 USB 串口写入配置并等待连接，出现「配网成功」即可拔线
+
+> 说明：「烧录前全擦除」默认不勾选，升级保留设备配置；需要全新刷写时手动勾选。
+
 ### 目录结构
 
 ```
-ESPVirtualKeyboard.ino - 主程序入口
-config.h               - 配置文件（WiFi、BLE、HID 键码、LED、自动模式参数）
+ESPVirtualKeyboard.ino - 主程序入口（初始化、主循环、LED 状态、串口配网）
+config.h               - 配置文件（WiFi、BLE、HID 键码、LED、自动/顺序模式参数）
 ble_keyboard.h/cpp     - BLE HID 键盘模块
+keymap.h/cpp           - 键名 ↔ HID 键码映射
 auto_mode.h/cpp        - 自动模式（加权随机、事件日志、统计计数）
+seq_mode.h/cpp         - 顺序模式（步骤录制、回放引擎、随机键/随机时序）
+random_util.h/cpp      - 共享随机工具（权重、随机键、seed 迁移）
 web_server.h/cpp       - Web 服务器（HTML/CSS/JS 控制面板）
 config_manager.h/cpp   - 配置管理（NVS 持久化、槽位管理、JSON 导入导出）
+firmware-updater/      - 固件包与出包（ESPEZUpdater build-kit 项目侧集成）
+docs/                  - 详细文档（入口见 docs/INDEX.md）
+ARDUINO_SETUP.md       - Arduino IDE 写入设置指南
 ```
 
 ### 依赖库
@@ -106,16 +142,16 @@ See [docs/INDEX.md](./docs/INDEX.md) for detailed documentation.
 - **Mobile Auto-Scaling**: Keyboard scales to viewport width, so mobile devices show the full keyboard
 - **Auto Mode**: Configurable automatic key simulation capability with weighted random key distribution and normal distribution timing
 - **Sequence Mode**: Record key sequences (duration/interval); steps support insert/duplicate/delete/move up-down/top-bottom/drag reorder and a repeat count; each step can use a random key (reusing auto-mode weights) and random timing (normal-distributed hold/gap); live step (64) and size (3KB) validation; save to 5 independent slots with looping and adjustable inter-loop gap; optional send-while-recording
-- **Export/Import All**: One-click export of all mode presets from the banner; import auto-skips identical configs and lets you choose target mode+slot for each differing one
-- **Config Management**: 5 persistent config slots (NVS) with save/load/overwrite/delete and JSON import/export
-- **BLE Rename**: Change the device Bluetooth name online via the web panel (NVS persisted, takes effect after BLE restart)
+- **Export/Import All**: One-click export of all mode presets from the banner; import auto-skips identical configs and lets you choose target mode+slot for each differing one, and preset names (including Chinese) are preserved on import
+- **Config Management**: 5 persistent config slots (NVS) with save/load/overwrite/delete and JSON import/export; preset names support Chinese, and the active preset name is shown at the top of the panel
+- **BLE Rename**: Change the device Bluetooth name online via the web panel (NVS persisted, takes effect after BLE restart), 1–24 characters, Chinese supported
 - **Web Login Auth** (optional): Enable panel login and write-operation auth via conditional compile `ENABLE_WEB_AUTH` to prevent unauthorized keystroke injection on the LAN
 - **Key-Stuck Timeout**: Auto-releases keys when no release arrives within a timeout, preventing stuck keys from crashes/disconnects
 - **Weight Limiting**: Real-time total display with backend normalization
 - **Key Logging**: Live key press log for auto mode
 - **Key Statistics**: Visual chart with per-key counts and percentages
 - **Theme Toggle**: Dark/Light mode with localStorage persistence
-- **LED Indicators**: D4=key flash, D5=BLE status
+- **LED Indicators**: D4=key flash, D5=status (blinks while advertising; solid when connected and idle; slow-blinks while auto or sequence mode is running)
 - **WiFi Reconnect**: Automatic detection and reconnection (non-blocking state machine)
 - **Firmware Footer**: Version and build date shown at the bottom of the page
 
@@ -149,7 +185,7 @@ This project uses the Luat ESP32C3 as a validation board, but based on some of i
 1. Clone this repository
 2. Configure WiFi (choose one):
    - Edit `WIFI_SSID` / `WIFI_PASSWORD` in `config.h` (compile-time credentials, highest priority); or
-   - Use the `ESPEZUpdater` tool's "Apply configuration" after flashing (persisted in NVS, no recompile; distribution packages ship with forced-empty credentials, so use this; firmware package under `firmware-updater/`)
+   - Use the [ESPEZUpdater](https://github.com/IceyVanci/ESPEZUpdater) tool's "Apply configuration" after flashing (persisted in NVS, no recompile; distribution packages ship with forced-empty credentials, so use this; firmware package under `firmware-updater/`, see the "Firmware Update" section below)
 3. Open `ESPVirtualKeyboard.ino` in Arduino IDE
 4. Select board `ESP32C3 Dev Module`
 5. **Set critical options** (see [Arduino Setup Guide](ARDUINO_SETUP.md)):
@@ -160,20 +196,57 @@ This project uses the Luat ESP32C3 as a validation board, but based on some of i
 8. Visit the IP in your browser for the control panel
 9. Pair with `ESP Virtual Keyboard` in Windows Bluetooth settings
 
+### Firmware Update
+
+> Both methods **preserve the device's saved configuration** by default (NVS is not erased); firmware packages ship with forced-empty credentials and are safe to distribute — WiFi credentials are entered in the page and written over serial.
+
+#### Method 1: Arduino IDE (developers / source changes)
+
+1. Pull/update this repository and open `ESPVirtualKeyboard.ino` in Arduino IDE
+2. Select board `ESP32C3 Dev Module`; see the [Arduino Setup Guide](ARDUINO_SETUP.md) for critical options:
+   - Partition Scheme → `Huge APP (3MB No OTA)`
+   - USB CDC On Boot → `Enabled`
+   - Flash Mode → `DIO`
+3. (Optional) Edit `config.h`: `WIFI_SSID` / `WIFI_PASSWORD`, `FW_VERSION`
+4. Click "Upload"; open the serial monitor (115200) to find the IP address
+
+#### Method 2: ESPEZUpdater (GUI one-click upgrade, recommended)
+
+Tool: <https://github.com/IceyVanci/ESPEZUpdater> (requires **v20261009 or later**, supports this project's profile schema 2)
+
+1. Get a firmware package (either):
+   - Use the firmware output directory committed to this repository: `firmware-updater/dist/firmware/` (contains `manifest.json`, `profile.json` and the four binaries); or
+   - Build it yourself: in `firmware-updater/` run
+     `powershell -NoProfile -ExecutionPolicy Bypass -File .\build-kit\build_common.ps1 -Build .\build.json`
+     (produces `dist/固件包_v<version>.zip`; see [firmware-updater/使用说明.md](firmware-updater/使用说明.md))
+2. Download and extract ESPEZUpdater, double-click `一键升级.bat` (the browser opens the local page, default `http://127.0.0.1:8123`)
+3. Click "选择固件目录…" and choose `firmware-updater/dist/firmware/`, or drag `固件包_v<version>.zip` into the page
+4. Fill in WiFi SSID/password (**leave empty = keep unchanged**) → "连接设备" → "开始升级"
+5. After flashing, the tool automatically writes the config over USB serial and waits for the connection; close the page once "配网成功" appears
+
+> Note: "Erase all flash before upload" is unchecked by default, so upgrades keep the device configuration; check it manually for a clean install.
+
 ### Project Structure
 
 ```
-ESPVirtualKeyboard.ino - Main entry point
-config.h               - Configuration (WiFi, BLE, HID keycodes, LED, auto mode)
+ESPVirtualKeyboard.ino - Main entry point (setup, main loop, LED status, serial provisioning)
+config.h               - Configuration (WiFi, BLE, HID keycodes, LED, auto/sequence params)
 ble_keyboard.h/cpp     - BLE HID keyboard module
+keymap.h/cpp           - Key name ↔ HID keycode mapping
 auto_mode.h/cpp        - Auto mode (weighted random, event log, stats)
+seq_mode.h/cpp         - Sequence mode (step recording, playback engine, random key/timing)
+random_util.h/cpp      - Shared random utilities (weights, random key, seed migration)
 web_server.h/cpp       - Web server (HTML/CSS/JS control panel)
 config_manager.h/cpp   - Config management (NVS persistence, slot management, JSON I/O)
+firmware-updater/      - Firmware package & build (ESPEZUpdater build-kit project integration)
+docs/                  - Detailed documentation (start at docs/INDEX.md)
+ARDUINO_SETUP.md       - Arduino IDE upload setup guide
 ```
 
 ### Dependencies
 
 - ESP32 Arduino Core (BLE, WiFi, WebServer, Preferences)
+- [ArduinoJson 7.x](https://arduinojson.org/) (JSON serialization/deserialization; install via Library Manager)
 
 ### License
 
